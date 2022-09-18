@@ -1,0 +1,50 @@
+# -----------To run----------------
+
+
+promise12,prostate158,decathlon,isbi
+promise12,prostate158,isbi,decathlon
+promise12,isbi,decathlon,prostate158
+promise12,isbi,prostate158,decathlon
+
+
+
+decathlon,prostate158,isbi,promise12
+decathlon,isbi,promise12,prostate158
+decathlon,isbi,prostate158,promise12
+
+
+
+prostate158,promise12,isbi,decathlon
+prostate158,isbi,decathlon,promise12
+prostate158,isbi,promise12,decathlon
+
+
+
+isbi,promise12,prostate158,decathlon
+isbi,prostate158,decathlon,promise12
+isbi,prostate158,promise12,decathlon
+
+
+# --------------Done---------------
+promise12,decathlon,prostate158,isbi - 16 
+promise12,decathlon,isbi,prostate158 - 22
+promise12,decathlon,isbi,prostate158 - 27
+
+decathlon,promise12,prostate158,isbi - 17 
+decathlon,promise12,isbi,prostate158 - 21
+decathlon,prostate158,promise12,isbi - 25
+
+prostate158,decathlon,promise12,isbi - 18 
+prostate158,decathlon,isbi,promise12 - 23
+prostate158,promise12,decathlon,isbi
+
+isbi,decathlon,promise12,prostate158 - 19 
+isbi,decathlon,prostate158,promise12 - 24
+isbi,promise12,decathlon,prostate158 - 29
+
+
+
+
+# Observations:
+    # 1. Prostate 158 is an important inisitilization for all the datasets
+    # 2. If current dataset is Prostate 158, then the performance is best on all test datasets

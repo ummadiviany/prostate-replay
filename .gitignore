@@ -1,0 +1,7 @@
+datasets/
+**/datasets/
+**/wandb/
+__pycache__/*
+*.pyc
+*.pyo
+*.pyd
