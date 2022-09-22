@@ -62,14 +62,14 @@ resize_dim = 256
 transforms_map = {
         "train_img_transform" : [
             AddChannel(),
-            Resize(spatial_size=(resize_dim, resize_dim, -1)),
+            # Resize(spatial_size=(resize_dim, resize_dim, -1)),
             # CenterSpatialCrop([train_roi_size, train_roi_size, -1]),
             RandSpatialCrop(roi_size= train_roi_size, random_center = True, random_size=False),
             ToTensor()
             ],
         "train_label_transform" : [
             AddChannel(),
-            Resize(spatial_size=(resize_dim, resize_dim, -1)),
+            # Resize(spatial_size=(resize_dim, resize_dim, -1)),
             # CenterSpatialCrop([train_roi_size, train_roi_size, -1]),
             RandSpatialCrop(roi_size= train_roi_size, random_center = True, random_size=False),
             AsDiscrete(threshold=0.5),
@@ -77,13 +77,13 @@ transforms_map = {
             ],
         "test_img_transform" : [
             AddChannel(),
-            Resize(spatial_size=(resize_dim, resize_dim, -1)),
+            # Resize(spatial_size=(resize_dim, resize_dim, -1)),
             # CenterSpatialCrop([train_roi_size, train_roi_size, -1]),
             ToTensor()
             ],
         "test_label_transform" : [
             AddChannel(),
-            Resize(spatial_size=(resize_dim, resize_dim, -1)),
+            # Resize(spatial_size=(resize_dim, resize_dim, -1)),
             # CenterSpatialCrop([train_roi_size, train_roi_size, -1]),
             AsDiscrete(threshold=0.5),
             ToTensor()
@@ -117,6 +117,12 @@ dataset_map = {
                 "test_size" : 0.15,
                 'test' :  {'images' : [], 'labels' : []},
                 'train' :  {'images' : [], 'labels' : []}
+                },
+        "prostatex" : {
+                "data_dir" : "../datasets/prostatexaligned/",
+                "test_size" : 0.15,
+                'test' :  {'images' : [], 'labels' : []},
+                'train' :  {'images' : [], 'labels' : []}
                 }
     }
 
@@ -128,6 +134,11 @@ def get_dataloaders():
 
         img_paths = glob(data_dir + "imagesTr/*.nii")
         label_paths = glob(data_dir + "labelsTr/*.nii")
+        
+        if dataset == "prostatex":
+            img_paths = [os.path.join(img, img.split('/')[-1]) for img in img_paths]
+            label_paths = [os.path.join(label, label.split('/')[-1]) for label in label_paths]
+        
         img_paths.sort()
         label_paths.sort()
         
@@ -181,29 +192,30 @@ if __name__ == "__main__":
     # print(f"Data loaders map: {dataloaders_map}")
     # print(f"Dataset map: {dataset_map}")
     
-    priomise12_train = dataloaders_map['promise12']['train']
-    imgs, labels = next(iter(priomise12_train))
-    imgs = rearrange(imgs, 'b c h w d -> (b d) c h w')
-    labels = rearrange(labels, 'b c h w d -> (b d) c h w')
-    print(f"Image shape : {imgs.shape}")
-    print(f"Label shape : {labels.shape}")
+    # priomise12_train = dataloaders_map['prostatex']['train']
+    # imgs, labels = next(iter(priomise12_train))
+    # imgs = rearrange(imgs, 'b c h w d -> (b d) c h w')
+    # labels = rearrange(labels, 'b c h w d -> (b d) c h w')
+    # print(f"Image shape : {imgs.shape}")
+    # print(f"Label shape : {labels.shape}")
 
-    img_no = 8
-    plt.figure(figsize=(6*3,6*1))
-    plt.subplot(1,3,1)
-    plt.imshow(imgs[img_no,0], cmap='gray')
-    plt.axis('off')
-    plt.title('Image')
-    plt.subplot(1,3,2)
-    plt.imshow(labels[img_no,0], cmap='gray')
-    plt.axis('off')
-    plt.title('Label')
-    plt.subplot(1,3,3)
-    plt.imshow(imgs[img_no,0], cmap='gray')
-    plt.imshow(labels[img_no,0], 'copper', alpha=0.2)
-    plt.axis('off')
-    plt.title('Overlay')
-    # plt.show()
-    plt.savefig('promise12.png')
+    # img_no = 8
+    # plt.figure(figsize=(6*3,6*1))
+    # plt.subplot(1,3,1)
+    # plt.imshow(imgs[img_no,0], cmap='gray')
+    # plt.axis('off')
+    # plt.title('Image')
+    # plt.subplot(1,3,2)
+    # plt.imshow(labels[img_no,0], cmap='gray')
+    # plt.axis('off')
+    # plt.title('Label')
+    # plt.subplot(1,3,3)
+    # plt.imshow(imgs[img_no,0], cmap='gray')
+    # plt.imshow(labels[img_no,0], 'copper', alpha=0.2)
+    # plt.axis('off')
+    # plt.title('Overlay')
+    # # plt.show()
+    # plt.savefig('promise12.png')
+    
     
     print(f"Completed in: {time() - start:.1f} seconds")

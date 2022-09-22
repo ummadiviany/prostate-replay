@@ -31,12 +31,11 @@ from torchvision.transforms import ToPILImage
 import argparse
 import pandas as pd
 
-from macpath import join
 
 torch.manual_seed(2000)
 set_determinism(seed=2000)
 
-wandb_log = True
+wandb_log = False
 local_log = False
 
 
@@ -46,6 +45,7 @@ parser = argparse.ArgumentParser(description='For training config')
 
 parser.add_argument('--order', type=str, help='order of the dataset domains')
 parser.add_argument('--device', type=str, help='Specify the device to use')
+parser.add_argument('--optimizer', type=str, help='Specify the optimizer to use')
 
 parser.add_argument('--epochs', type=int, help='No of epochs')
 parser.add_argument('--lr', type=float, help='Learning rate')
@@ -53,28 +53,37 @@ parser.add_argument('--lr_decay', type=float, help='Learning rate decay factor f
 parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed after training on each dataset')
 
 parser.add_argument('--replay', default=True, action=argparse.BooleanOptionalAction)
-parser.add_argument('--em_frac', type=int, help='Percentage of the dataset to be used stored in memory for replay')
+parser.add_argument('--store_samples', type=int, help='No of samples to store for replay')
 
+# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:1 --optimizer sgd --epochs 100 --lr 1e-3 --lr_decay 1 --epoch_decay 1 --store_samples 5
 
 parsed_args = parser.parse_args()
 
 domain_order = parsed_args.order.split(',')
 device = parsed_args.device
+optimizer_name = parsed_args.optimizer
+
 epochs = parsed_args.epochs
 initial_lr = parsed_args.lr
 lr_decay = parsed_args.lr_decay
 epoch_decay = parsed_args.epoch_decay
 use_replay = parsed_args.replay
-replay_percentage = parsed_args.em_frac
+store_samples = parsed_args.store_samples
 
+print('-'*100)
 print(f"{'-->'.join(domain_order)}")
 print(f"Using device : {device}")
 print(f"Training for {epochs} epochs")
+print(f"Using optimizer : {optimizer_name}")
+
 print(f"Inital learning rate : {initial_lr}")
 print(f"Using replay : {use_replay}")
-print(f"Replay percentage : {replay_percentage}")
+print(f"Replay Sample Size : {store_samples}")
+
 print(f"LR decay  : {lr_decay}")
 print(f"Epoch decay : {epoch_decay}")
+print('-'*100)
+
 # ----------------------------Train Config-----------------------------------------
 
 model = UNet(
@@ -200,14 +209,7 @@ def train(train_loader : DataLoader, em_loader : DataLoader = None):
     if wandb_log:
         wandb.log(log_metrics)
         print(f'Logged training metrics to wandb')
-        
-    if local_log:
-        log_metrics.pop("Epoch")
-        for key,value in log_metrics.items():
-            df.loc[epoch][key] = value
-        
-    
-    
+
 
     dice_metric.reset()
     hd_metric.reset()
@@ -229,7 +231,10 @@ def validate(test_loader : DataLoader, dataset_name : str = None):
             imgs = rearrange(imgs, 'b c h w d -> (b d) c h w')
             labels = rearrange(labels, 'b c h w d -> (b d) c h w')
 
-            preds = model(imgs)
+            # preds = model(imgs)
+            roi_size = (160, 160)
+            preds = sliding_window_inference(inputs=imgs, roi_size=roi_size, sw_batch_size=4,
+                                                predictor=model, overlap = 0.5, mode = 'gaussian', device=device)
             
             preds = [post_pred(i) for i in decollate_batch(preds)]
             preds = torch.stack(preds)
@@ -273,11 +278,10 @@ replay_buffer = {
         'labels' : [],
     },
 }
-replay_percentage = 0.1
 
 def accumulate_replay_buffer():
     train_samples_count = len(dataset_map[dataset_name]['train']['images'])
-    replay_count = int(train_samples_count * replay_percentage)
+    replay_count = store_samples
     print(f"Storing {replay_count} Samples from {dataset_name.capitalize()} to replay buffer")
     idxs = idxs = list(map(int, np.linspace(0, train_samples_count-1, num=replay_count).tolist()))
     replay_buffer['train']['images'] +=  [dataset_map[dataset_name]['train']['images'][idx] for idx in idxs]
@@ -285,10 +289,21 @@ def accumulate_replay_buffer():
     print(f"Current replay buffer size : {len(replay_buffer['train']['labels'])}")
 
 
+optimizer_map ={
+    'sgd' : torch.optim.SGD,
+    'rmsprop' : torch.optim.RMSprop,
+    'adam' : torch.optim.Adam,
+}
+
+optimizer_params  = {
+    'sgd' : {'momentum' : 0.9, 'weight_decay' : 1e-5, 'nesterov' : True},
+    'rmsprop' : {'momentum' : 0.9, 'weight_decay' : 1e-5},
+    'adam' : {'weight_decay': 1e-5,},   
+}
+
 for i, dataset_name in enumerate(domain_order, 1):
     
-    optimizer = Adam(model.parameters(), lr=initial_lr, weight_decay=1e-5)
-    # optimizer = ASGD(model.parameters(), lr=initial_lr)
+    optimizer = optimizer_map[optimizer_name](model.parameters(), lr = initial_lr * (lr_decay**(i-1)), **optimizer_params[optimizer_name])    
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, verbose=True)
 
     train_loader = dataloaders_map[dataset_name]['train']
@@ -322,15 +337,7 @@ for i, dataset_name in enumerate(domain_order, 1):
                         wandb.log(log_metrics)
                         print(f'Logged {dname} test metrics to wandb')
                         
-                    if local_log:
-                        log_metrics.pop("Epoch")
-                        for key,value in log_metrics.items():
-                            df.loc[epoch][key] = value
                         
     # Add 10% of samples from current dataset to replay buffer
     accumulate_replay_buffer()    
 
-
-if local_log:
-    df.to_csv(f"{wandb.run.name}.csv")
-    print(f"Saved {wandb.run.name}.csv")

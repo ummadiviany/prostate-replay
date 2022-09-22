@@ -34,7 +34,7 @@ import pandas as pd
 torch.manual_seed(2000)
 set_determinism(seed=2000)
 
-wandb_log = True
+wandb_log = False
 
 from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
 
@@ -47,10 +47,10 @@ parser.add_argument('--optimizer', type=str, help='Specify the optimizer to use'
 
 parser.add_argument('--epochs', type=int, help='No of epochs')
 parser.add_argument('--lr', type=float, help='Learning rate')
-parser.add_argument('--lr_decay', type=float, help='Learning rate decay factor for each dataset')
-parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed after training on each dataset')
+parser.add_argument('--lr_decay', type=float, help='Learning rate decay factor for each dataset. range[0, 1]')
+parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed after training on each dataset. range[0, 1]')
 
-
+# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:0 --optimizer sgd --epochs 100 --lr 1e-3 --lr_decay 1 --epoch_decay 1
 
 parsed_args = parser.parse_args()
 

@@ -62,14 +62,14 @@ resize_dim = 256
 transforms_map = {
         "train_img_transform" : [
             AddChannel(),
-            Resize(spatial_size=(resize_dim, resize_dim, -1)),
+            # Resize(spatial_size=(resize_dim, resize_dim, -1)),
             # CenterSpatialCrop([train_roi_size, train_roi_size, -1]),
             RandSpatialCrop(roi_size= train_roi_size, random_center = True, random_size=False),
             ToTensor()
             ],
         "train_label_transform" : [
             AddChannel(),
-            Resize(spatial_size=(resize_dim, resize_dim, -1)),
+            # Resize(spatial_size=(resize_dim, resize_dim, -1)),
             # CenterSpatialCrop([train_roi_size, train_roi_size, -1]),
             RandSpatialCrop(roi_size= train_roi_size, random_center = True, random_size=False),
             AsDiscrete(threshold=0.5),
@@ -77,13 +77,13 @@ transforms_map = {
             ],
         "test_img_transform" : [
             AddChannel(),
-            Resize(spatial_size=(resize_dim, resize_dim, -1)),
+            # Resize(spatial_size=(resize_dim, resize_dim, -1)),
             # CenterSpatialCrop([train_roi_size, train_roi_size, -1]),
             ToTensor()
             ],
         "test_label_transform" : [
             AddChannel(),
-            Resize(spatial_size=(resize_dim, resize_dim, -1)),
+            # Resize(spatial_size=(resize_dim, resize_dim, -1)),
             # CenterSpatialCrop([train_roi_size, train_roi_size, -1]),
             AsDiscrete(threshold=0.5),
             ToTensor()

@@ -34,7 +34,7 @@ import pandas as pd
 torch.manual_seed(2000)
 set_determinism(seed=2000)
 
-wandb_log = True
+wandb_log = False
 
 
 from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
@@ -63,8 +63,9 @@ dataloaders_map, dataset_map = get_dataloaders()
 img_paths = []
 label_paths = []
 for dataset in dataset_map:
-    img_paths += dataset_map[dataset]['train']['images']
-    label_paths += dataset_map[dataset]['train']['labels']
+    if dataset not in ['prostatex']:
+        img_paths += dataset_map[dataset]['train']['images']
+        label_paths += dataset_map[dataset]['train']['labels']
 joint_train_loader = get_dataloader(
     img_paths = img_paths,
     label_paths = label_paths,
@@ -134,6 +135,7 @@ val_interval = 5
 batch_interval = 25
 img_log_interval = 15
 log_images = False
+model_save_interval = 25
 
 def train(train_loader : DataLoader, em_loader : DataLoader = None):
     """
@@ -157,7 +159,10 @@ def train(train_loader : DataLoader, em_loader : DataLoader = None):
         labels = rearrange(labels, 'b c h w d -> (b d) c h w')
 
         optimizer.zero_grad()
-        preds = model(imgs)
+        # preds = model(imgs)
+        roi_size = (192, 192)
+        preds = sliding_window_inference(inputs=imgs, roi_size=roi_size, sw_batch_size=4,
+                                            predictor=model, overlap = 0.5, mode = 'gaussian', device=device)
 
         loss = dice_ce_loss(preds, labels)
 
@@ -251,7 +256,7 @@ def validate(test_loader : DataLoader, dataset_name : str = None):
     
 # -------------------------------Training Loop----------------------------------------
 
-test_dataset_names = ['prostate158', 'isbi', 'promise12', 'decathlon']
+test_dataset_names = ['prostate158', 'isbi', 'promise12', 'decathlon',]
 
 for epoch in range(1, epochs+1):   
 
@@ -271,7 +276,11 @@ for epoch in range(1, epochs+1):
                 wandb.log(log_metrics)
                 print(f'Logged {dname} test metrics to wandb')
                     
-                    
+    if epoch % model_save_interval == 0:
+        # Save the model weights to disk
+        model_name = 'unet2d_joint'
+        torch.save(model.state_dict(), f"weights/{model_name}_{epoch}.pth")
+        print(f"\nSaved model weights to weights/{model_name}_{epoch}.pth\n")
 
 
 

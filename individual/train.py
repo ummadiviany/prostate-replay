@@ -34,7 +34,7 @@ import pandas as pd
 torch.manual_seed(2000)
 set_determinism(seed=2000)
 
-wandb_log = True
+wandb_log = False
 
 
 from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
@@ -109,8 +109,8 @@ config = {
     "Loss" : "DiceCELoss", 
     "Train Data Augumentations" : "Resize(256,256), RandSpatialCrop(160, 160)",
     "Test Data Preprocess" : "Resize(256,256)",
-    "Train samples" : {"Promise12" : 45, "ISBI" : 63, "Decathlon" : 25, "Prostate158" : 119},
-    "Test Samples" : {"Promise12" : 5, "ISBI" : 16, "Decathlon" : 7, "Prostate158" : 20},
+    "Train samples" : {"Promise12" : 45, "ISBI" : 63, "Decathlon" : 25, "Prostate158" : 119, "Prostatex" : 56},
+    "Test Samples" : {"Promise12" : 5, "ISBI" : 16, "Decathlon" : 7, "Prostate158" : 20, "Prostatex" : 10},
 #     RandFlip, RandRotate90, RandGaussianNoise, RandGaussSmooth, RandBiasField, RandContrast
     "Pred Post Processing" : "KeepLargestConnectedComponent"
 }
@@ -123,8 +123,8 @@ batch_size = 1
 test_shuffle = True
 val_interval = 5
 batch_interval = 25
-img_log_interval = 15
-log_images = False
+img_log_interval = 10
+log_images = True
 
 def train(train_loader : DataLoader, em_loader : DataLoader = None):
     """
@@ -148,7 +148,10 @@ def train(train_loader : DataLoader, em_loader : DataLoader = None):
         labels = rearrange(labels, 'b c h w d -> (b d) c h w')
 
         optimizer.zero_grad()
-        preds = model(imgs)
+        # preds = model(imgs)
+        roi_size = (192, 192)
+        preds = sliding_window_inference(inputs=imgs, roi_size=roi_size, sw_batch_size=4,
+                                            predictor=model, overlap = 0.5, mode = 'gaussian', device=device)
 
         loss = dice_ce_loss(preds, labels)
 
@@ -206,7 +209,7 @@ def validate(test_loader : DataLoader, dataset_name : str = None):
             labels = rearrange(labels, 'b c h w d -> (b d) c h w')
 
             # preds = model(imgs)
-            roi_size = (160, 160)
+            roi_size = (192, 192)
             preds = sliding_window_inference(inputs=imgs, roi_size=roi_size, sw_batch_size=4,
                                             predictor=model, overlap = 0.5, mode = 'gaussian', device=device)
             
@@ -233,7 +236,7 @@ def validate(test_loader : DataLoader, dataset_name : str = None):
                 labels = torch.stack([argmax(c) for c in labels])
                 f = make_grid(torch.cat([imgs,labels,preds],dim=3), nrow =2, padding = 20, pad_value = 1)
                 images = wandb.Image(ToPILImage()(f.cpu()), caption="Left: Input, Middle : Ground Truth, Right: Prediction")
-                wandb.log({f"{dataset_name.upper()} Predictions": images, "Epoch" : epoch})
+                wandb.log({f"{dataset_name.upper()} Test Predictions": images, "Epoch" : epoch})
                 print(f'Logged {dataset_name} segmentation predeictions to wandb')
             
         

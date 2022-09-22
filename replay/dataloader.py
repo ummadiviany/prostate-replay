@@ -62,28 +62,28 @@ resize_dim = 256
 transforms_map = {
         "train_img_transform" : [
             AddChannel(),
-            Resize(spatial_size=(resize_dim, resize_dim, -1)),
+            # Resize(spatial_size=(resize_dim, resize_dim, -1)),
             # CenterSpatialCrop([train_roi_size, train_roi_size, -1]),
-            # RandSpatialCrop(roi_size= train_roi_size, random_center = True, random_size=False),
+            RandSpatialCrop(roi_size= train_roi_size, random_center = True, random_size=False),
             ToTensor()
             ],
         "train_label_transform" : [
             AddChannel(),
-            Resize(spatial_size=(resize_dim, resize_dim, -1)),
+            # Resize(spatial_size=(resize_dim, resize_dim, -1)),
             # CenterSpatialCrop([train_roi_size, train_roi_size, -1]),
-            # RandSpatialCrop(roi_size= train_roi_size, random_center = True, random_size=False),
+            RandSpatialCrop(roi_size= train_roi_size, random_center = True, random_size=False),
             AsDiscrete(threshold=0.5),
             ToTensor()
             ],
         "test_img_transform" : [
             AddChannel(),
-            Resize(spatial_size=(resize_dim, resize_dim, -1)),
+            # Resize(spatial_size=(resize_dim, resize_dim, -1)),
             # CenterSpatialCrop([train_roi_size, train_roi_size, -1]),
             ToTensor()
             ],
         "test_label_transform" : [
             AddChannel(),
-            Resize(spatial_size=(resize_dim, resize_dim, -1)),
+            # Resize(spatial_size=(resize_dim, resize_dim, -1)),
             # CenterSpatialCrop([train_roi_size, train_roi_size, -1]),
             AsDiscrete(threshold=0.5),
             ToTensor()
@@ -94,26 +94,26 @@ transforms_map = {
 # 1. Image & Label paths
 dataset_map = {
         "promise12" : {
-            "data_dir" : "datasets/promise12prostatealigned/",
+            "data_dir" : "../datasets/promise12prostatealigned/",
             "test_size" : 0.1,
             'test' :  {'images' : [], 'labels' : []},
             'train' :  {'images' : [], 'labels' : []}
             
             },
         "decathlon" : {
-            "data_dir" : "datasets/decathlonprostatealigned/",
+            "data_dir" : "../datasets/decathlonprostatealigned/",
             "test_size" : 0.2,
             'test' :  {'images' : [], 'labels' : []},
             'train' :  {'images' : [], 'labels' : []}
             },
         "isbi" : {
-            "data_dir" : "datasets/isbiprostatealigned/",
+            "data_dir" : "../datasets/isbiprostatealigned/",
             "test_size" : 0.2,
             'test' :  {'images' : [], 'labels' : []},
             'train' :  {'images' : [], 'labels' : []}
             },
         "prostate158" : {
-                "data_dir" : "datasets/prostate158aligned/",
+                "data_dir" : "../datasets/prostate158aligned/",
                 "test_size" : 0.15,
                 'test' :  {'images' : [], 'labels' : []},
                 'train' :  {'images' : [], 'labels' : []}
@@ -123,7 +123,7 @@ dataset_map = {
 def get_dataloaders():
     
     for dataset in dataset_map:
-        print(f"------------{dataset}------------")
+        # print(f"------------{dataset}------------")
         data_dir = dataset_map[dataset]['data_dir']
 
         img_paths = glob(data_dir + "imagesTr/*.nii")
@@ -135,8 +135,8 @@ def get_dataloaders():
 
         images_fold, labels_fold  = get_img_label_folds(img_paths, label_paths)
         
-        print("Number of images: {}".format(len(images_fold)))
-        print("Number of labels: {}".format(len(labels_fold)))
+        # print("Number of images: {}".format(len(images_fold)))
+        # print("Number of labels: {}".format(len(labels_fold)))
         
         # Get train and test sets
         # 3. Split into train - test
@@ -153,7 +153,7 @@ def get_dataloaders():
         dataloaders_map = {}
 
     for dataset in dataset_map:
-        print(f"------------{dataset}------------")
+        # print(f"------------{dataset}------------")
         dataloaders_map[dataset] = {}
         for ttset in ['train', 'test']:
             
@@ -166,7 +166,7 @@ def get_dataloaders():
                                                             label_paths = dataset_map[dataset][ttset]['labels'],
                                                             train = train)
             
-            print(f"""No of samples in {dataset}-{ttset} : {len(dataloaders_map[dataset][ttset])}""")
+            # print(f"""No of samples in {dataset}-{ttset} : {len(dataloaders_map[dataset][ttset])}""")
 
     # 7. That's it
     
