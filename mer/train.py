@@ -1,4 +1,5 @@
 # imports and installs
+from math import gamma
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -31,7 +32,6 @@ from torchvision.transforms import ToPILImage
 import argparse
 import pandas as pd
 
-
 torch.manual_seed(2000)
 set_determinism(seed=2000)
 
@@ -39,6 +39,7 @@ wandb_log = True
 
 from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
 from clmetrics import print_cl_metrics
+from copy import deepcopy
 # ------------------------------------------------------------------------------------
 parser = argparse.ArgumentParser(description='For training config')
 
@@ -46,15 +47,18 @@ parser.add_argument('--order', type=str, help='order of the dataset domains')
 parser.add_argument('--device', type=str, help='Specify the device to use')
 parser.add_argument('--optimizer', type=str, help='Specify the optimizer to use')
 
-parser.add_argument('--epochs', type=int, help='No of epochs')
 parser.add_argument('--lr', type=float, help='Learning rate')
 parser.add_argument('--lr_decay', type=float, help='Learning rate decay factor for each dataset')
-parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed after training on each dataset')
 
 parser.add_argument('--replay', default=True, action=argparse.BooleanOptionalAction)
 parser.add_argument('--store_samples', type=int, help='No of samples to store for replay')
 
-# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:1 --optimizer sgd --epochs 100 --lr 1e-3 --lr_decay 1 --epoch_decay 1 --store_samples 5
+# Meta experience replay config
+parser.add_argument('--beta', type=float, help='Beta for meta experience replay')
+parser.add_argument('--gamma', type=float, help='Beta for meta experience replay')
+
+
+# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:1 --optimizer adam  --lr 1e-3 --lr_decay 1  --store_samples 5 --beta 1 --gamma 1
 
 parsed_args = parser.parse_args()
 
@@ -62,17 +66,17 @@ domain_order = parsed_args.order.split(',')
 device = parsed_args.device
 optimizer_name = parsed_args.optimizer
 
-epochs = parsed_args.epochs
 initial_lr = parsed_args.lr
 lr_decay = parsed_args.lr_decay
-epoch_decay = parsed_args.epoch_decay
 use_replay = parsed_args.replay
 store_samples = parsed_args.store_samples
+
+beta = parsed_args.beta
+gamma = parsed_args.gamma
 
 print('-'*100)
 print(f"{'-->'.join(domain_order)}")
 print(f"Using device : {device}")
-print(f"Training for {epochs} epochs")
 print(f"Using optimizer : {optimizer_name}")
 
 print(f"Inital learning rate : {initial_lr}")
@@ -80,7 +84,10 @@ print(f"Using replay : {use_replay}")
 print(f"Replay Sample Size : {store_samples}")
 
 print(f"LR decay  : {lr_decay}")
-print(f"Epoch decay : {epoch_decay}")
+
+print(f"Using beta : {beta}")
+print(f"Using gamma : {gamma}")
+
 print('-'*100)
 
 # ----------------------------Train Config-----------------------------------------
@@ -112,22 +119,20 @@ dice_ce_loss = DiceCELoss(to_onehot_y=True, softmax=True,)
 
 config = {
     "Model" : "UNet2D",
-    "Seqential Strategy" : f"Raw/Naive Replay with {store_samples} from each dataset",
+    "Seqential Strategy" : f"Meta Expereince Replay with beta : {beta} and gamma : {gamma}",
     "Domain Ordering" : domain_order,
-    "Batch Training Strategy" : "A batch from current dataset and a batch from episodic memeory are stacked. One backward pass and paramenter update.",
-#     "Train Input ROI size" : train_roi_size,
-#     "Test Input size" : (1, 320, 320),
-#     "Test mode" : f"Sliding window inference roi = {train_roi_size}",
+    "Train Input size" : "Complete Image Resolution",
+    "Train Mode" : f"Patch based (160, 160)",
+    "Test Input size" : "Complete Image Resolution",
+    "Test mode" : f"Sliding Window(160, 160) Inference",
     "Batch size" : "No of slices in original volume",
     "No of volumes per batch" : 1,
-    "Epochs" : epochs,
-    "Epoch decay" : epoch_decay,
-    "Optimizer" : optimizer_name.capitalize(),
+    "Initial Learning Rate" : initial_lr,
+    "Learning Rate Decay(for each task)" : lr_decay,
+    "Optimizer" : f"{optimizer_name.upper()}",
     "Scheduler" : "CosineAnnealingLR",
-    "Initial LR" : initial_lr,
-    "LR decay" : lr_decay,
     "Loss" : "DiceCELoss", 
-    "Train Data Augumentations" : "RandSpatialCrop(160,160)",
+    "Train Data Augumentations" : "RandSpatialCrop",
     "Test Data Preprocess" : "",
     "Train samples" : {"Promise12" : 45, "ISBI" : 63, "Decathlon" : 25, "Prostate158" : 119},
     "Test Samples" : {"Promise12" : 5, "ISBI" : 16, "Decathlon" : 7, "Prostate158" : 20},
@@ -136,7 +141,14 @@ config = {
 
 if wandb_log:
     wandb.login()
-    wandb.init(project="CL_Replay", entity="vinayu", config = config)
+    wandb.init(project="CL_Baselines", entity="vinayu", config = config)
+    
+# ----------------------------------------------------------------------------------------------------
+
+
+# ----------------------------------------------------------------------------------------------------
+
+    
     
 batch_size = 1
 test_shuffle = True
@@ -157,10 +169,12 @@ def train(train_loader : DataLoader, em_loader : DataLoader = None):
     model.train()
     print('\n')
     
+    before = deepcopy(model.state_dict())
     
     # Iterating over the dataset
     for i, (imgs, labels) in enumerate(train_loader, 1):
-
+        weights_before = deepcopy(model.state_dict())
+        
         imgs, labels = imgs.to(device), labels.to(device)
         
         if em_loader is not None:
@@ -169,15 +183,16 @@ def train(train_loader : DataLoader, em_loader : DataLoader = None):
         
             # Stacking up batch from current dataset and episodic memeory 
             imgs, labels = torch.cat([imgs, em_imgs], dim=-1), torch.cat([labels, em_labels], dim=-1)
-        
+            
         imgs = rearrange(imgs, 'b c h w d -> (b d) c h w')
         labels = rearrange(labels, 'b c h w d -> (b d) c h w')
 
         optimizer.zero_grad()
         preds = model(imgs)
-
+        
         loss = dice_ce_loss(preds, labels)
-
+        # print(f"Dice CE loss : {loss:.3f}")
+        
         preds = [post_pred(i) for i in decollate_batch(preds)]
         preds = torch.stack(preds)
         labels = [post_label(i) for i in decollate_batch(labels)]
@@ -191,10 +206,22 @@ def train(train_loader : DataLoader, em_loader : DataLoader = None):
         optimizer.step()
 
         epoch_loss += loss.item()
+        
+        weights_after = model.state_dict()
+        # Within sample reptile meta update
+        model.load_state_dict({name: weights_before[name] + beta * (weights_after[name] - weights_before[name]) for name in weights_before})
 
         if i % batch_interval == 0:
             print(f"Epoch: [{epoch}/{epochs}], Batch: [{i}/{len(train_loader)}], Loss: {loss.item() :.4f}, \
                   Dice: {dice_metric.aggregate().item() * 100 :.2f}, HD: {hd_metric.aggregate().item() :.2f}")
+    
+    
+    after = model.state_dict()
+    # Across dataset meta update
+    model.load_state_dict({
+        name : before[name] + (after[name] - before[name]) * gamma for name in before
+    })
+    
     
     # Print metrics, log data, reset metrics
     
@@ -204,12 +231,12 @@ def train(train_loader : DataLoader, em_loader : DataLoader = None):
     log_metrics = {f"{dataset_name.upper()} Train Dice" : dice_metric.aggregate().item() * 100,
                    f"{dataset_name.upper()} Train HD" : hd_metric.aggregate().item(),
                    f"{dataset_name.upper()} Train Loss" : epoch_loss / len(train_loader),
-                   # "Learning Rate" : scheduler.get_last_lr()[0],
+                   f"{dataset_name.upper()} Learning Rate" : scheduler.get_last_lr()[0],
                    f"Epoch" : epoch }
     if wandb_log:
         wandb.log(log_metrics)
         print(f'Logged training metrics to wandb')
-
+        
 
     dice_metric.reset()
     hd_metric.reset()
@@ -234,7 +261,7 @@ def validate(test_loader : DataLoader, dataset_name : str = None):
             # preds = model(imgs)
             roi_size = (160, 160)
             preds = sliding_window_inference(inputs=imgs, roi_size=roi_size, sw_batch_size=4,
-                                                predictor=model, overlap = 0.5, mode = 'gaussian', device=device)
+                                            predictor=model, overlap = 0.5, mode = 'gaussian', device=device)
             
             preds = [post_pred(i) for i in decollate_batch(preds)]
             preds = torch.stack(preds)
@@ -271,24 +298,6 @@ dataloaders_map, dataset_map = get_dataloaders()
 
 
 
-# Empty replay buffer as a list
-replay_buffer = {
-    "train" : {
-        'images' : [],
-        'labels' : [],
-    },
-}
-
-def accumulate_replay_buffer():
-    train_samples_count = len(dataset_map[dataset_name]['train']['images'])
-    replay_count = store_samples
-    print(f"Storing {replay_count} Samples from {dataset_name.capitalize()} to replay buffer")
-    idxs = idxs = list(map(int, np.linspace(0, train_samples_count-1, num=replay_count).tolist()))
-    replay_buffer['train']['images'] +=  [dataset_map[dataset_name]['train']['images'][idx] for idx in idxs]
-    replay_buffer['train']['labels'] +=  [dataset_map[dataset_name]['train']['labels'][idx] for idx in idxs]
-    print(f"Current replay buffer size : {len(replay_buffer['train']['labels'])}")
-
-
 optimizer_map ={
     'sgd' : torch.optim.SGD,
     'rmsprop' : torch.optim.RMSprop,
@@ -301,30 +310,59 @@ optimizer_params  = {
     'adam' : {'weight_decay': 1e-5,},   
 }
 
+
+# Empty replay buffer as a list
+replay_buffer = {
+    "train" : {
+        'images' : [],
+        'labels' : [],
+    },
+}
+
+def accumulate_replay_buffer():
+    train_samples_count = len(dataset_map[dataset_name]['train']['images'])
+    replay_count = store_samples
+    print('-'*100)
+    print(f"Storing {replay_count} Samples from {dataset_name.capitalize()} to replay buffer")
+    idxs = idxs = list(map(int, np.linspace(0, train_samples_count-1, num=replay_count).tolist()))
+    replay_buffer['train']['images'] +=  [dataset_map[dataset_name]['train']['images'][idx] for idx in idxs]
+    replay_buffer['train']['labels'] +=  [dataset_map[dataset_name]['train']['labels'][idx] for idx in idxs]
+    print(f"Current replay buffer size : {len(replay_buffer['train']['labels'])}")
+    print('-'*100)
+
 test_metrics = []
+batch_size = 1
 
 for i, dataset_name in enumerate(domain_order, 1):
     
+    # At max train for 50 epochs
+    # epochs = len(dataset_map[dataset_name]['train']['images']) // batch_size
+    # epochs = min(epochs, 50)
+    epochs = 100
     optimizer = optimizer_map[optimizer_name](model.parameters(), lr = initial_lr * (lr_decay**(i-1)), **optimizer_params[optimizer_name])    
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, verbose=True)
 
     train_loader = dataloaders_map[dataset_name]['train']
+    test_dataset_names = ['prostate158', 'isbi', 'promise12', 'decathlon']
+
+
     if i != 1:
         em_loader = get_dataloader(img_paths = replay_buffer['train']['images'],
                                 label_paths = replay_buffer['train']['labels'],
                                 train = True)
 
-    test_dataset_names = ['prostate158', 'isbi', 'promise12', 'decathlon']
-
     metric_prefix  = i
     
-    for epoch in range(1, int(epochs * (epoch_decay**(i-1))) + 1):   
-        
+    for epoch in range(1, int(epochs + 1)):   
+
             if i == 1:
+                print(f"Training on {dataset_name.capitalize()} for {epochs} epochs")
                 train(train_loader = train_loader, em_loader = None)
             else:
+                print(f"Training on {dataset_name} with {len(replay_buffer['train']['images'])} samples from previous domains for {epochs} epochs")
                 train(train_loader = train_loader, em_loader = em_loader)
-            
+                
+                        
             if epoch % val_interval == 0:
                 test_metric = []
                 for dname in test_dataset_names:
@@ -343,10 +381,12 @@ for i, dataset_name in enumerate(domain_order, 1):
                     test_metric.append(val_dice*100)
                     
     test_metrics.append(test_metric)
-    
-    # Add 10% of samples from current dataset to replay buffer
+    # Add current domain samples to replay buffer
+    # Resorvoir sampling to select samples
     accumulate_replay_buffer()    
-
-
+    
+    
 cl_metrics = print_cl_metrics(domain_order, test_dataset_names, test_metrics)
-wandb.log(cl_metrics)
+if wandb_log:
+    wandb.log(cl_metrics)
+    print(f'Logged CL metrics to wandb')

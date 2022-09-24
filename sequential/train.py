@@ -37,6 +37,7 @@ set_determinism(seed=2000)
 wandb_log = False
 
 from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
+from clmetrics import print_cl_metrics
 
 # ------------------------------------------------------------------------------------
 parser = argparse.ArgumentParser(description='For training config')
@@ -272,6 +273,7 @@ optimizer_params  = {
     'adam' : {'weight_decay': 1e-5,},   
 }
 
+test_metrics = []
 
 for i, dataset_name in enumerate(domain_order, 1):
     
@@ -288,6 +290,7 @@ for i, dataset_name in enumerate(domain_order, 1):
             train(train_loader = train_loader, em_loader = None)
                         
             if epoch % val_interval == 0:
+                test_metric = []
                 for dname in test_dataset_names:
                     val_dice, val_hd = validate(test_loader = dataloaders_map[dname]['test'], dataset_name = dname)
                     
@@ -301,3 +304,10 @@ for i, dataset_name in enumerate(domain_order, 1):
                         wandb.log(log_metrics)
                         print(f'Logged {dname} test metrics to wandb')
                         
+                    test_metric.append(val_dice*100)
+                    
+    test_metrics.append(test_metric)
+    
+    
+cl_metrics = print_cl_metrics(domain_order, test_dataset_names, test_metrics)
+wandb.log(cl_metrics)
