@@ -46,7 +46,7 @@ parser.add_argument('--order', type=str, help='order of the dataset domains')
 parser.add_argument('--device', type=str, help='Specify the device to use')
 parser.add_argument('--optimizer', type=str, help='Specify the optimizer to use')
 
-parser.add_argument('--initial_epochs', type=int, help='No of epochs')
+parser.add_argument('--epochs', type=int, help='No of epochs')
 parser.add_argument('--lr', type=float, help='Learning rate')
 parser.add_argument('--lr_decay', type=float, help='Learning rate decay factor for each dataset')
 parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed after training on each dataset')
@@ -54,7 +54,7 @@ parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed af
 parser.add_argument('--replay', default=True, action=argparse.BooleanOptionalAction)
 parser.add_argument('--store_samples', type=int, help='No of samples to store for replay')
 
-# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:0 --optimizer adam --initial_epochs 100 --lr 1e-3 --lr_decay 1 --epoch_decay 1 --replay --store_samples 5
+# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:1 --optimizer sgd --epochs 100 --lr 1e-3 --lr_decay 1 --epoch_decay 1 --store_samples 5
 
 parsed_args = parser.parse_args()
 
@@ -62,7 +62,7 @@ domain_order = parsed_args.order.split(',')
 device = parsed_args.device
 optimizer_name = parsed_args.optimizer
 
-initial_epochs = parsed_args.epochs
+epochs = parsed_args.epochs
 initial_lr = parsed_args.lr
 lr_decay = parsed_args.lr_decay
 epoch_decay = parsed_args.epoch_decay
@@ -113,6 +113,10 @@ dice_ce_loss = DiceCELoss(to_onehot_y=True, softmax=True,)
 config = {
     "Model" : "UNet2D",
     "Seqential Strategy" : f"Raw/Naive Replay with {store_samples} from each dataset",
+    "Replay" : use_replay,
+    "Replay Sample Size" : store_samples,
+    "Replay Strategy" : "Raw",
+    "Replay Sample Selection" : "Samples with highest class 1 percentage",
     "Domain Ordering" : domain_order,
     "Batch Training Strategy" : "A batch from current dataset and a batch from episodic memeory are stacked. One backward pass and paramenter update.",
 #     "Train Input ROI size" : train_roi_size,
@@ -279,11 +283,14 @@ replay_buffer = {
     },
 }
 
+import json
+label_class_map = json.load(open('label_class_map.json'))
+
 def accumulate_replay_buffer():
-    train_samples_count = len(dataset_map[dataset_name]['train']['images'])
-    replay_count = store_samples
-    print(f"Storing {replay_count} Samples from {dataset_name.capitalize()} to replay buffer")
-    idxs = idxs = list(map(int, np.linspace(0, train_samples_count-1, num=replay_count).tolist()))
+    
+    print(f"Storing {store_samples} Samples from {dataset_name.capitalize()} to replay buffer")
+    idxs = list(label_class_map[dataset_name].keys())
+    idxs = list(map(int, idxs[:store_samples]))
     replay_buffer['train']['images'] +=  [dataset_map[dataset_name]['train']['images'][idx] for idx in idxs]
     replay_buffer['train']['labels'] +=  [dataset_map[dataset_name]['train']['labels'][idx] for idx in idxs]
     print(f"Current replay buffer size : {len(replay_buffer['train']['labels'])}")
@@ -305,9 +312,7 @@ test_metrics = []
 
 for i, dataset_name in enumerate(domain_order, 1):
     
-    epochs = int(initial_epochs * (epoch_decay**(i-1))) 
-    lr = initial_lr * (lr_decay**(i-1))
-    optimizer = optimizer_map[optimizer_name](model.parameters(), lr=lr, **optimizer_params[optimizer_name])    
+    optimizer = optimizer_map[optimizer_name](model.parameters(), lr = initial_lr * (lr_decay**(i-1)), **optimizer_params[optimizer_name])    
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, verbose=True)
 
     train_loader = dataloaders_map[dataset_name]['train']
@@ -320,7 +325,7 @@ for i, dataset_name in enumerate(domain_order, 1):
 
     metric_prefix  = i
     
-    for epoch in range(1, epochs+1):   
+    for epoch in range(1, int(epochs * (epoch_decay**(i-1))) + 1):   
         
             if i == 1:
                 train(train_loader = train_loader, em_loader = None)

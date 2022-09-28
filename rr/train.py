@@ -1,4 +1,5 @@
 # imports and installs
+from turtle import right
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -46,7 +47,7 @@ parser.add_argument('--order', type=str, help='order of the dataset domains')
 parser.add_argument('--device', type=str, help='Specify the device to use')
 parser.add_argument('--optimizer', type=str, help='Specify the optimizer to use')
 
-parser.add_argument('--initial_epochs', type=int, help='No of epochs')
+parser.add_argument('--epochs', type=int, help='No of epochs')
 parser.add_argument('--lr', type=float, help='Learning rate')
 parser.add_argument('--lr_decay', type=float, help='Learning rate decay factor for each dataset')
 parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed after training on each dataset')
@@ -54,7 +55,7 @@ parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed af
 parser.add_argument('--replay', default=True, action=argparse.BooleanOptionalAction)
 parser.add_argument('--store_samples', type=int, help='No of samples to store for replay')
 
-# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:0 --optimizer adam --initial_epochs 100 --lr 1e-3 --lr_decay 1 --epoch_decay 1 --replay --store_samples 5
+# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:1 --optimizer adam --epochs 100 --lr 1e-3 --lr_decay 1 --epoch_decay 1  --replay --store_samples 5
 
 parsed_args = parser.parse_args()
 
@@ -62,7 +63,7 @@ domain_order = parsed_args.order.split(',')
 device = parsed_args.device
 optimizer_name = parsed_args.optimizer
 
-initial_epochs = parsed_args.epochs
+epochs = parsed_args.epochs
 initial_lr = parsed_args.lr
 lr_decay = parsed_args.lr_decay
 epoch_decay = parsed_args.epoch_decay
@@ -105,6 +106,29 @@ post_label = Compose([EnsureType(), AsDiscrete(to_onehot=2)])
 argmax = AsDiscrete(argmax=True)
 dice_ce_loss = DiceCELoss(to_onehot_y=True, softmax=True,)
 
+
+
+# ------------------------------Representatoin Replay-------------------------------
+import random
+model_layer_map = {}
+for name, module in model.named_modules():
+    model_layer_map[name] = module
+    
+def get_model_layer(layer_name):
+    return model_layer_map[layer_name]
+
+activation = {}
+def get_activation(name):
+    def hook(model, input, output):
+        activation[name] = output.detach()
+    return hook
+
+model_layer_name = 'model.1.submodule.1.submodule.1.submodule.1.submodule.conv.unit2.adn.A'
+model_layer = get_model_layer(model_layer_name)
+
+replay_memory = []
+l1_loss = nn.L1Loss()
+
 # ------------------------------------WANDB Logging-------------------------------------
 
 # List for datasets will be passed as an argument for this file
@@ -112,9 +136,11 @@ dice_ce_loss = DiceCELoss(to_onehot_y=True, softmax=True,)
 
 config = {
     "Model" : "UNet2D",
-    "Seqential Strategy" : f"Raw/Naive Replay with {store_samples} from each dataset",
+    "Seqential Strategy" : f"Latent Represenation Replay with {store_samples} samples for each domain",
+    "Replay Strategy" : "Sample same no of channels from the replay memory as of curr batch size",
+    "Replay Loss" : "L1 Loss",
     "Domain Ordering" : domain_order,
-    "Batch Training Strategy" : "A batch from current dataset and a batch from episodic memeory are stacked. One backward pass and paramenter update.",
+    # "Batch Training Strategy" : "A batch from current dataset and a batch from episodic memeory are stacked. One backward pass and paramenter update.",
 #     "Train Input ROI size" : train_roi_size,
 #     "Test Input size" : (1, 320, 320),
 #     "Test mode" : f"Sliding window inference roi = {train_roi_size}",
@@ -136,7 +162,7 @@ config = {
 
 if wandb_log:
     wandb.login()
-    wandb.init(project="CL_Replay", entity="vinayu", config = config)
+    wandb.init(project="CL_Baselines", entity="vinayu", config = config)
     
 batch_size = 1
 test_shuffle = True
@@ -145,30 +171,21 @@ batch_interval = 25
 img_log_interval = 15
 log_images = False
 
-def train(train_loader : DataLoader, em_loader : DataLoader = None):
+def train(train_loader : DataLoader, replay : bool = False):
     """
     Inputs : No Inputs
     Outputs : No Outputs
     Function : Trains all datasets and logs metrics to WANDB
     """
-    
+    model.train()
     train_start = time()
     epoch_loss = 0
-    model.train()
     print('\n')
-    
     
     # Iterating over the dataset
     for i, (imgs, labels) in enumerate(train_loader, 1):
 
         imgs, labels = imgs.to(device), labels.to(device)
-        
-        if em_loader is not None:
-            em_imgs, em_labels = next(iter(em_loader))
-            em_imgs, em_labels = em_imgs.to(device), em_labels.to(device)
-        
-            # Stacking up batch from current dataset and episodic memeory 
-            imgs, labels = torch.cat([imgs, em_imgs], dim=-1), torch.cat([labels, em_labels], dim=-1)
         
         imgs = rearrange(imgs, 'b c h w d -> (b d) c h w')
         labels = rearrange(labels, 'b c h w d -> (b d) c h w')
@@ -177,7 +194,40 @@ def train(train_loader : DataLoader, em_loader : DataLoader = None):
         preds = model(imgs)
 
         loss = dice_ce_loss(preds, labels)
-
+        # print(f"DiceCE Loss : {loss.item():.3f}")
+        
+        if replay:
+            # Sample one latent representation from replay memory
+            replay_sample = random.sample(replay_memory, 1)[0].to(device)
+            # print(f"Replay Sample shape: {replay_sample.shape}")
+            
+            # Compute L1 loss for representation replay samples and add to total loss
+            model_layer.register_forward_hook(get_activation(model_layer_name))
+            latent_representation = activation[model_layer_name]
+            # print(f"Latent Representation shape : {latent_representation.shape}")
+            
+            # Check which one has minimum no of channels
+            min_channels = min(replay_sample.shape[0], latent_representation.shape[0])
+            min_idx = np.argmin([replay_sample.shape[0], latent_representation.shape[0]])
+            max_channels = max(replay_sample.shape[0], latent_representation.shape[0])
+            
+            diff = max_channels - min_channels
+            left = diff // 2
+            right = max_channels - left
+            
+            if diff % 2 != 0:
+                right -= 1
+            
+            if min_idx == 0:
+                latent_representation = latent_representation[left:right, :, :, :].to(device)
+            else:
+                replay_sample = replay_sample[left:right, :, :, :].to(device)
+            
+            latent_loss = l1_loss(replay_sample, latent_representation)
+            # print(f"Latent loss : {latent_loss:.3f}")
+            loss += latent_loss
+            
+        
         preds = [post_pred(i) for i in decollate_batch(preds)]
         preds = torch.stack(preds)
         labels = [post_label(i) for i in decollate_batch(labels)]
@@ -271,23 +321,25 @@ dataloaders_map, dataset_map = get_dataloaders()
 
 
 
-# Empty replay buffer as a list
-replay_buffer = {
-    "train" : {
-        'images' : [],
-        'labels' : [],
-    },
-}
+@torch.no_grad()
+def accumulate_replay_memory():
+    print('-'*100)
+    print("Accumulating replay memory...")
+    print(f"Storing {store_samples} latent representations for {dataset_name.capitalize()} to replay buffer")
+    
+    for _ in range(store_samples):
+        imgs, _ = next(iter(dataloaders_map[dataset_name]['train']))
+        imgs = imgs.to(device)
+        imgs = rearrange(imgs, 'b c h w d -> (b d) c h w')
+        
+        model_layer.register_forward_hook(get_activation(model_layer_name))
+        _ = model(imgs)
+        latent_representation = activation[model_layer_name]
+        print(f"Latent representation shape : {latent_representation.shape}")
+        replay_memory.append(latent_representation.cpu())
 
-def accumulate_replay_buffer():
-    train_samples_count = len(dataset_map[dataset_name]['train']['images'])
-    replay_count = store_samples
-    print(f"Storing {replay_count} Samples from {dataset_name.capitalize()} to replay buffer")
-    idxs = idxs = list(map(int, np.linspace(0, train_samples_count-1, num=replay_count).tolist()))
-    replay_buffer['train']['images'] +=  [dataset_map[dataset_name]['train']['images'][idx] for idx in idxs]
-    replay_buffer['train']['labels'] +=  [dataset_map[dataset_name]['train']['labels'][idx] for idx in idxs]
-    print(f"Current replay buffer size : {len(replay_buffer['train']['labels'])}")
-
+    print(f"Current replay memory size : {len(replay_memory)}")
+    print('-'*100)
 
 optimizer_map ={
     'sgd' : torch.optim.SGD,
@@ -305,49 +357,42 @@ test_metrics = []
 
 for i, dataset_name in enumerate(domain_order, 1):
     
-    epochs = int(initial_epochs * (epoch_decay**(i-1))) 
-    lr = initial_lr * (lr_decay**(i-1))
-    optimizer = optimizer_map[optimizer_name](model.parameters(), lr=lr, **optimizer_params[optimizer_name])    
+    optimizer = optimizer_map[optimizer_name](model.parameters(), lr = initial_lr * (lr_decay**(i-1)), **optimizer_params[optimizer_name])    
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, verbose=True)
 
     train_loader = dataloaders_map[dataset_name]['train']
-    if i != 1:
-        em_loader = get_dataloader(img_paths = replay_buffer['train']['images'],
-                                label_paths = replay_buffer['train']['labels'],
-                                train = True)
-
     test_dataset_names = ['prostate158', 'isbi', 'promise12', 'decathlon']
 
     metric_prefix  = i
-    
-    for epoch in range(1, epochs+1):   
+    for epoch in range(1, int(epochs * (epoch_decay**(i-1))) + 1):   
         
-            if i == 1:
-                train(train_loader = train_loader, em_loader = None)
-            else:
-                train(train_loader = train_loader, em_loader = em_loader)
-            
-            if epoch % val_interval == 0:
-                test_metric = []
-                for dname in test_dataset_names:
-                    val_dice, val_hd = validate(test_loader = dataloaders_map[dname]['test'], dataset_name = dname)
-                    
-                    log_metrics = {}
-                    log_metrics[f'Epoch'] = epoch
-                    log_metrics[f'{metric_prefix}_{dname}_curr_dice'] = val_dice*100 
-                    log_metrics[f'{metric_prefix}_{dname}_curr_hd'] = val_hd
+        if i == 1:
+            train(train_loader = train_loader, replay=False)
+        else:
+            if use_replay:
+                train(train_loader = train_loader, replay=True)
 
-                    if wandb_log:
-                        # Quantiative metrics
-                        wandb.log(log_metrics)
-                        print(f'Logged {dname} test metrics to wandb')
-                        
-                    test_metric.append(val_dice*100)
+        if epoch % val_interval == 0:
+            test_metric = []
+            for dname in test_dataset_names:
+                val_dice, val_hd = validate(test_loader = dataloaders_map[dname]['test'], dataset_name = dname)
+                
+                log_metrics = {}
+                log_metrics[f'Epoch'] = epoch
+                log_metrics[f'{metric_prefix}_{dname}_curr_dice'] = val_dice*100 
+                log_metrics[f'{metric_prefix}_{dname}_curr_hd'] = val_hd
+
+                if wandb_log:
+                    # Quantiative metrics
+                    wandb.log(log_metrics)
+                    print(f'Logged {dname} test metrics to wandb')
+                    
+                test_metric.append(val_dice*100)
                     
     test_metrics.append(test_metric)
     
-    # Add 10% of samples from current dataset to replay buffer
-    accumulate_replay_buffer()    
+    # Add 5 latent representations to replay memory
+    accumulate_replay_memory()    
 
 
 cl_metrics = print_cl_metrics(domain_order, test_dataset_names, test_metrics)

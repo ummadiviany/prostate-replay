@@ -132,13 +132,113 @@ if wandb_log:
     wandb.init(project="CL_Baselines", entity="vinayu", config = config)
     
 # ----------------------------------------------------------------------------------------------------
-from copy import deepcopy
-from l2reg import L2Reg
-l2_regulizer = L2Reg(alpha)
+import quadprog
+memory_strength = 0.5
+patterns_per_experience = 10
+memory_x = {}
+memory_y = {}
+memory_tid = {}
+global_G = None
+
+def before_training_iteration():
+    # Before training iteration on an experience/task
+    model.train()
+    local_G = []
+    for x,y in zip(memory_x, memory_y):
+        x, y = x.to(device), y.to(device)
+        optimizer.zero_grad()
+        out = model(x)
+        loss = dice_ce_loss(out, y)
+        loss.backward()
+
+        local_G.append(
+            torch.cat(
+                [
+                    p.grad.flatten()
+                    if p.grad is not None
+                    else torch.zeros(p.numel()).to(device)
+                    for p in model.parameters()
+                ],
+                dim = 0
+            )
+        )
+       
+@torch.no_grad() 
+def after_backward(tid):
+    # After backward pass in training iteration on an experience/task
+    # After backward : projct gradients
+    if tid > 0:
+        g = torch.cat(
+            [
+                p.grad.flatten()
+                if p.grad is not None
+                else torch.zeros(p.numel()).to(device)
+                for p in model.parameters()
+            ],
+            dim=0,
+        )
+
+        to_project = (torch.mv(global_G, g) < 0).any()
+    else:
+        to_project = False
+        
+    if to_project:
+        v_star = solve_quadprog(g).to(device)
+
+        num_pars = 0  # reshape v_star into the parameter matrices
+        for p in model.parameters():
+            curr_pars = p.numel()
+            if p.grad is not None:
+                p.grad.copy_(
+                    v_star[num_pars: num_pars + curr_pars].view(p.size())
+                )
+            num_pars += curr_pars
+
+        assert num_pars == v_star.numel(), "Error in projecting gradient"
+        
+        
+# After training experiment
+# update memory with patterns from current experience
+def update_memory(dataloader, tid):
+    # Update memory
+    for x, y in dataloader:
+        if tid not in memory_x:
+            memory_x[tid] = []
+            memory_y[tid] = []
+            memory_tid[tid] = []
+        else:
+            memory_x[tid].append(x)
+            memory_y[tid].append(y)
+            memory_tid[tid].append(tid)
+            
+    memory_x[tid] = torch.cat(memory_x[tid], dim=0)
+    memory_y[tid] = torch.cat(memory_y[tid], dim=0)
+    memory_tid[tid] = torch.cat(memory_tid[tid], dim=0)
+    
+
+def solve_quadprog(g):
+    """
+    Solve quadratic programming with current gradient g and
+    gradients matrix on previous tasks G.
+    Taken from original code:
+    https://github.com/facebookresearch/GradientEpisodicMemory/blob/master/model/gem.py
+    """
+    
+    memories_np = global_G.cpu().double().numpy()
+    gradient_np = g.cpu().contiguous().view(-1).double().numpy()
+    t = memories_np.shape[0]
+    P = np.dot(memories_np, memories_np.transpose())
+    P = 0.5 * (P + P.transpose()) + np.eye(t) * 1e-3
+    q = np.dot(memories_np, gradient_np) * -1
+    G = np.eye(t)
+    h = np.zeros(t) + memory_strength
+    v = quadprog.solve_qp(P, q, G, h)[0]
+    v_star = np.dot(v, memories_np) + gradient_np
+
+    return torch.from_numpy(v_star).float()
+# --------------------------------------------------------------------------
 
 # ----------------------------------------------------------------------------------------------------
-
-    
     
 batch_size = 1
 test_shuffle = True
@@ -170,18 +270,7 @@ def train(train_loader : DataLoader, em_loader : DataLoader = None):
         optimizer.zero_grad()
         preds = model(imgs)
 
-        
         loss = dice_ce_loss(preds, labels)
-        # print(f"Dice CE loss : {loss:.3f}")
-        
-        if dataset_name != domain_order[0]:
-            # Adding L2 regularization to the loss
-            # L2 regularization is only added to the loss after the first domain is trained
-            prev_dataset_name = domain_order[domain_order.index(dataset_name) - 1]
-            l2_loss = l2_regulizer(model, models_map[prev_dataset_name])
-            # print(f"l2_loss : {l2_loss:.3f}")
-            
-            loss += l2_loss
         
         preds = [post_pred(i) for i in decollate_batch(preds)]
         preds = torch.stack(preds)
@@ -274,8 +363,6 @@ dataloaders_map, dataset_map = get_dataloaders()
     
 # -----------------------------------------------------------------------
 
-
-
 optimizer_map ={
     'sgd' : torch.optim.SGD,
     'rmsprop' : torch.optim.RMSprop,
@@ -289,7 +376,6 @@ optimizer_params  = {
 }
 
 test_metrics = []
-models_map = {}
 
 for i, dataset_name in enumerate(domain_order, 1):
     
@@ -305,27 +391,47 @@ for i, dataset_name in enumerate(domain_order, 1):
 
             train(train_loader = train_loader, em_loader = None)
                         
-            if epoch % val_interval == 0:
-                test_metric = []
-                for dname in test_dataset_names:
-                    val_dice, val_hd = validate(test_loader = dataloaders_map[dname]['test'], dataset_name = dname)
+    #         if epoch % val_interval == 0:
+    #             test_metric = []
+    #             for dname in test_dataset_names:
+    #                 val_dice, val_hd = validate(test_loader = dataloaders_map[dname]['test'], dataset_name = dname)
                     
-                    log_metrics = {}
-                    log_metrics[f'Epoch'] = epoch
-                    log_metrics[f'{metric_prefix}_{dname}_curr_dice'] = val_dice*100 
-                    log_metrics[f'{metric_prefix}_{dname}_curr_hd'] = val_hd
+    #                 log_metrics = {}
+    #                 log_metrics[f'Epoch'] = epoch
+    #                 log_metrics[f'{metric_prefix}_{dname}_curr_dice'] = val_dice*100 
+    #                 log_metrics[f'{metric_prefix}_{dname}_curr_hd'] = val_hd
 
-                    if wandb_log:
-                        # Quantiative metrics
-                        wandb.log(log_metrics)
-                        print(f'Logged {dname} test metrics to wandb')
+    #                 if wandb_log:
+    #                     # Quantiative metrics
+    #                     wandb.log(log_metrics)
+    #                     print(f'Logged {dname} test metrics to wandb')
                         
-                    test_metric.append(val_dice*100)
+    #                 test_metric.append(val_dice*100)
                     
-    test_metrics.append(test_metric)
-    models_map[dataset_name] = deepcopy(model)
+    # test_metrics.append(test_metric)
     
     
     
-cl_metrics = print_cl_metrics(domain_order, test_dataset_names, test_metrics)
-wandb.log(cl_metrics)
+# cl_metrics = print_cl_metrics(domain_order, test_dataset_names, test_metrics)
+# if wandb_log:
+#     wandb.log(cl_metrics)
+#     print(f'Logged CL metrics to wandb')
+
+
+
+# -----------------------------------------------------------------------
+# 
+# T = len(domain_order) # Number of domains
+# M = {t:{"imgs" : [], "labels" : []} for t in range(T)}
+# for t in range(T):
+#     for x,y in dataloaders_map[domain_order[t]]['train']:
+#         M[t]["imgs"].append(x)
+#         M[t]["labels"].append(y)
+        
+        # g = grad(l(f(x), y)
+        # gk = grad(l(f, Mk)) for all k < t
+        # ~g = gradient projection
+        # theta = theta - alpha * ~g  (final parameter update)
+# 
+# -----------------------------------------------------------------------
+
