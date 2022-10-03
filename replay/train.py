@@ -32,11 +32,6 @@ import argparse
 import pandas as pd
 
 
-torch.manual_seed(2000)
-set_determinism(seed=2000)
-
-wandb_log = True
-
 from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
 from clmetrics import print_cl_metrics
 # ------------------------------------------------------------------------------------
@@ -53,6 +48,9 @@ parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed af
 
 parser.add_argument('--replay', default=True, action=argparse.BooleanOptionalAction)
 parser.add_argument('--store_samples', type=int, help='No of samples to store for replay')
+parser.add_argument('--seed', type=int, help='Seed for the experiment')
+parser.add_argument('--wandb_log', default=False, action=argparse.BooleanOptionalAction)
+parser.add_argument('--order_reverse', default=False, action=argparse.BooleanOptionalAction)
 
 # python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:0 --optimizer adam --initial_epochs 100 --lr 1e-3 --lr_decay 1 --epoch_decay 1 --replay --store_samples 5
 
@@ -62,26 +60,36 @@ domain_order = parsed_args.order.split(',')
 device = parsed_args.device
 optimizer_name = parsed_args.optimizer
 
-initial_epochs = parsed_args.epochs
+initial_epochs = parsed_args.initial_epochs
 initial_lr = parsed_args.lr
 lr_decay = parsed_args.lr_decay
 epoch_decay = parsed_args.epoch_decay
 use_replay = parsed_args.replay
 store_samples = parsed_args.store_samples
+seed = parsed_args.seed
+wandb_log = parsed_args.wandb_log
+order_reverse = parsed_args.order_reverse
+
+if order_reverse:
+    domain_order = domain_order[::-1]
 
 print('-'*100)
 print(f"{'-->'.join(domain_order)}")
 print(f"Using device : {device}")
-print(f"Training for {epochs} epochs")
+print(f"Initially training for {initial_epochs} epochs")
 print(f"Using optimizer : {optimizer_name}")
 
 print(f"Inital learning rate : {initial_lr}")
 print(f"Using replay : {use_replay}")
 print(f"Replay Sample Size : {store_samples}")
 
-print(f"LR decay  : {lr_decay}")
-print(f"Epoch decay : {epoch_decay}")
+print(f"Seed : {seed}")
+print(f"Wandb logging : {wandb_log}")
 print('-'*100)
+
+# Set seed for reproducibility
+torch.manual_seed(seed)
+set_determinism(seed=seed)
 
 # ----------------------------Train Config-----------------------------------------
 
@@ -111,6 +119,7 @@ dice_ce_loss = DiceCELoss(to_onehot_y=True, softmax=True,)
 
 
 config = {
+    "Seed" : seed,
     "Model" : "UNet2D",
     "Seqential Strategy" : f"Raw/Naive Replay with {store_samples} from each dataset",
     "Domain Ordering" : domain_order,
@@ -120,7 +129,7 @@ config = {
 #     "Test mode" : f"Sliding window inference roi = {train_roi_size}",
     "Batch size" : "No of slices in original volume",
     "No of volumes per batch" : 1,
-    "Epochs" : epochs,
+    "Initial Epochs" : initial_epochs,
     "Epoch decay" : epoch_decay,
     "Optimizer" : optimizer_name.capitalize(),
     "Scheduler" : "CosineAnnealingLR",
@@ -302,10 +311,12 @@ optimizer_params  = {
 }
 
 test_metrics = []
+epochs_list = [100, 64, 40, 26]
 
 for i, dataset_name in enumerate(domain_order, 1):
     
     epochs = int(initial_epochs * (epoch_decay**(i-1))) 
+    epochs = epochs_list[i-1]
     lr = initial_lr * (lr_decay**(i-1))
     optimizer = optimizer_map[optimizer_name](model.parameters(), lr=lr, **optimizer_params[optimizer_name])    
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, verbose=True)

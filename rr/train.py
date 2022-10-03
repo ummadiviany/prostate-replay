@@ -39,7 +39,7 @@ set_determinism(seed=2000)
 wandb_log = True
 
 from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
-from clmetrics import print_cl_metrics
+from agg_metrics import print_cl_metrics
 # ------------------------------------------------------------------------------------
 parser = argparse.ArgumentParser(description='For training config')
 
@@ -47,7 +47,7 @@ parser.add_argument('--order', type=str, help='order of the dataset domains')
 parser.add_argument('--device', type=str, help='Specify the device to use')
 parser.add_argument('--optimizer', type=str, help='Specify the optimizer to use')
 
-parser.add_argument('--epochs', type=int, help='No of epochs')
+parser.add_argument('--initial_epochs', type=int, help='No of epochs')
 parser.add_argument('--lr', type=float, help='Learning rate')
 parser.add_argument('--lr_decay', type=float, help='Learning rate decay factor for each dataset')
 parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed after training on each dataset')
@@ -63,7 +63,7 @@ domain_order = parsed_args.order.split(',')
 device = parsed_args.device
 optimizer_name = parsed_args.optimizer
 
-epochs = parsed_args.epochs
+initial_epochs = parsed_args.initial_epochs
 initial_lr = parsed_args.lr
 lr_decay = parsed_args.lr_decay
 epoch_decay = parsed_args.epoch_decay
@@ -73,7 +73,7 @@ store_samples = parsed_args.store_samples
 print('-'*100)
 print(f"{'-->'.join(domain_order)}")
 print(f"Using device : {device}")
-print(f"Training for {epochs} epochs")
+print(f"Initially training for {initial_epochs} epochs")
 print(f"Using optimizer : {optimizer_name}")
 
 print(f"Inital learning rate : {initial_lr}")
@@ -146,7 +146,7 @@ config = {
 #     "Test mode" : f"Sliding window inference roi = {train_roi_size}",
     "Batch size" : "No of slices in original volume",
     "No of volumes per batch" : 1,
-    "Epochs" : epochs,
+    "Initial Epochs" : initial_epochs,
     "Epoch decay" : epoch_decay,
     "Optimizer" : optimizer_name.capitalize(),
     "Scheduler" : "CosineAnnealingLR",
@@ -206,24 +206,26 @@ def train(train_loader : DataLoader, replay : bool = False):
             latent_representation = activation[model_layer_name]
             # print(f"Latent Representation shape : {latent_representation.shape}")
             
-            # Check which one has minimum no of channels
-            min_channels = min(replay_sample.shape[0], latent_representation.shape[0])
-            min_idx = np.argmin([replay_sample.shape[0], latent_representation.shape[0]])
-            max_channels = max(replay_sample.shape[0], latent_representation.shape[0])
+            # # Check which one has minimum no of channels
+            # min_channels = min(replay_sample.shape[0], latent_representation.shape[0])
+            # min_idx = np.argmin([replay_sample.shape[0], latent_representation.shape[0]])
+            # max_channels = max(replay_sample.shape[0], latent_representation.shape[0])
             
-            diff = max_channels - min_channels
-            left = diff // 2
-            right = max_channels - left
+            # diff = max_channels - min_channels
+            # left = diff // 2
+            # right = max_channels - left
             
-            if diff % 2 != 0:
-                right -= 1
+            # if diff % 2 != 0:
+            #     right -= 1
             
-            if min_idx == 0:
-                latent_representation = latent_representation[left:right, :, :, :].to(device)
-            else:
-                replay_sample = replay_sample[left:right, :, :, :].to(device)
+            # if min_idx == 0:
+            #     latent_representation = latent_representation[left:right, :, :, :].to(device)
+            # else:
+            #     replay_sample = replay_sample[left:right, :, :, :].to(device)
             
-            latent_loss = l1_loss(replay_sample, latent_representation)
+            # latent_loss = l1_loss(replay_sample, latent_representation)
+            latent_loss = torch.abs(replay_sample.mean() - latent_representation.mean())
+            # latent_loss += torch.abs(replay_sample.median() - latent_representation.median())
             # print(f"Latent loss : {latent_loss:.3f}")
             loss += latent_loss
             
@@ -354,17 +356,21 @@ optimizer_params  = {
 }
 
 test_metrics = []
+# epochs_list = [100, 64, 40, 26]
 
 for i, dataset_name in enumerate(domain_order, 1):
     
-    optimizer = optimizer_map[optimizer_name](model.parameters(), lr = initial_lr * (lr_decay**(i-1)), **optimizer_params[optimizer_name])    
+    epochs = int(initial_epochs * (epoch_decay**(i-1))) 
+    # epochs = epochs_list[i-1]
+    lr = initial_lr * (lr_decay**(i-1))
+    optimizer = optimizer_map[optimizer_name](model.parameters(), lr =lr, **optimizer_params[optimizer_name])    
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, verbose=True)
 
     train_loader = dataloaders_map[dataset_name]['train']
     test_dataset_names = ['prostate158', 'isbi', 'promise12', 'decathlon']
 
     metric_prefix  = i
-    for epoch in range(1, int(epochs * (epoch_decay**(i-1))) + 1):   
+    for epoch in range(1, epochs + 1):   
         
         if i == 1:
             train(train_loader = train_loader, replay=False)

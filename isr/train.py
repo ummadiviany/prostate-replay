@@ -18,7 +18,7 @@ from monai.metrics import DiceMetric, HausdorffDistanceMetric
 from monai.inferers import sliding_window_inference
 from monai.losses import DiceLoss, FocalLoss, GeneralizedDiceLoss, DiceCELoss, DiceFocalLoss
 from monai.networks.nets import UNet, VNet, UNETR, SwinUNETR, AttentionUnet
-from monai.data import decollate_batch, ImageDataset
+from monai.data import decollate_batch
 from monai.utils import set_determinism
 import os
 import wandb
@@ -31,50 +31,72 @@ from torchvision.transforms import ToPILImage
 import argparse
 import pandas as pd
 
-torch.manual_seed(2000)
-set_determinism(seed=2000)
-
-wandb_log = True
-
 from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
-from agg_metrics import print_cl_metrics
-
+from clmetrics import print_cl_metrics
 # ------------------------------------------------------------------------------------
+
+# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:0 --optimizer adam --initial_epochs 5 --lr 1e-3 --lr_decay 1 --epoch_decay 1 --replay --store_samples 5 --wandb_log True --seed 2000 --sampling_strategy importance
+# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:0 --optimizer adam --initial_epochs 100 --lr 1e-3 --lr_decay 1 --epoch_decay 1 --replay --store_samples 5 --wandb_log True --seed 2000 --sampling_strategy random --order_reverese
+
 parser = argparse.ArgumentParser(description='For training config')
 
 parser.add_argument('--order', type=str, help='order of the dataset domains')
 parser.add_argument('--device', type=str, help='Specify the device to use')
 parser.add_argument('--optimizer', type=str, help='Specify the optimizer to use')
-parser.add_argument('--alpha', type=float, help='Alpha value for L2 regularization')
 
-parser.add_argument('--epochs', type=int, help='No of epochs')
+parser.add_argument('--initial_epochs', type=int, help='No of epochs')
 parser.add_argument('--lr', type=float, help='Learning rate')
-parser.add_argument('--lr_decay', type=float, help='Learning rate decay factor for each dataset. range[0, 1]')
-parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed after training on each dataset. range[0, 1]')
+parser.add_argument('--lr_decay', type=float, help='Learning rate decay factor for each dataset')
+parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed after training on each dataset')
 
-# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:0 --optimizer sgd --epochs 100 --lr 1e-3 --lr_decay 1 --epoch_decay 1
+parser.add_argument('--replay', default=True, action=argparse.BooleanOptionalAction)
+parser.add_argument('--store_samples', type=int, help='No of samples to store for replay')
+parser.add_argument('--seed', type=int, help='Seed for the experiment')
+parser.add_argument('--wandb_log', default=False, action=argparse.BooleanOptionalAction)
+parser.add_argument('--order_reverse', default=False, action=argparse.BooleanOptionalAction)
+parser.add_argument('--sampling_strategy', type=str, help='Sampling strategy for replay buffer')
 
 parsed_args = parser.parse_args()
 
 domain_order = parsed_args.order.split(',')
 device = parsed_args.device
 optimizer_name = parsed_args.optimizer
-alpha = parsed_args.alpha
-epochs = parsed_args.epochs
+
+initial_epochs = parsed_args.initial_epochs
 initial_lr = parsed_args.lr
 lr_decay = parsed_args.lr_decay
 epoch_decay = parsed_args.epoch_decay
+use_replay = parsed_args.replay
+store_samples = parsed_args.store_samples
+seed = parsed_args.seed
+wandb_log = parsed_args.wandb_log
+order_reverse = parsed_args.order_reverse
+sampling_strategy = parsed_args.sampling_strategy
+
+if order_reverse:
+    domain_order = domain_order[::-1]
 
 print('-'*100)
 print(f"{'-->'.join(domain_order)}")
-print(f"Alpha for L2 regularization: {alpha}")
 print(f"Using device : {device}")
+print(f"Initially training for {initial_epochs} epochs")
 print(f"Using optimizer : {optimizer_name}")
-print(f"Training for {epochs} epochs")
+
 print(f"Inital learning rate : {initial_lr}")
+print(f"Using replay : {use_replay}")
+print(f"Replay Sample Size : {store_samples}")
+print(f"Sampling strategy : {sampling_strategy}")
+
 print(f"LR decay  : {lr_decay}")
 print(f"Epoch decay : {epoch_decay}")
+
+print(f"Seed : {seed}")
+print(f"Wandb logging : {wandb_log}")
 print('-'*100)
+
+# Set seed for reproducibility
+torch.manual_seed(seed)
+set_determinism(seed=seed)
 
 # ----------------------------Train Config-----------------------------------------
 
@@ -104,23 +126,27 @@ dice_ce_loss = DiceCELoss(to_onehot_y=True, softmax=True,)
 
 
 config = {
+    "Seed" : seed,
     "Model" : "UNet2D",
-    "Seqential Strategy" : f"Training with L2 Regularization, alpha = {alpha}",
+    "Replay" : use_replay,
+    "Replay Sample Size" : store_samples,
+    "Replay Strategy" : "Raw",
+    "Sampling Strategy" : sampling_strategy,
     "Domain Ordering" : domain_order,
-    "Train Input size" : "Complete Image Resolution",
-    "Train Mode" : f"Patch based (160, 160)",
-    "Test Input size" : "Complete Image Resolution",
-    "Test mode" : f"Sliding Window(160, 160) Inference",
+    "Batch Training Strategy" : "A batch from current dataset and a batch from episodic memeory are stacked. One backward pass and paramenter update.",
+#     "Train Input ROI size" : train_roi_size,
+#     "Test Input size" : (1, 320, 320),
+#     "Test mode" : f"Sliding window inference roi = {train_roi_size}",
     "Batch size" : "No of slices in original volume",
     "No of volumes per batch" : 1,
-    "Epochs" : epochs,
-    "Epoch decay(for each task)" : epoch_decay,
-    "Initial Learning Rate" : initial_lr,
-    "Learning Rate Decay(for each task)" : lr_decay,
-    "Optimizer" : f"{optimizer_name.upper()}",
+    "Initial Epochs" : initial_epochs,
+    "Epoch decay" : epoch_decay,
+    "Optimizer" : optimizer_name.capitalize(),
     "Scheduler" : "CosineAnnealingLR",
+    "Initial LR" : initial_lr,
+    "LR decay" : lr_decay,
     "Loss" : "DiceCELoss", 
-    "Train Data Augumentations" : "RandSpatialCrop",
+    "Train Data Augumentations" : "RandSpatialCrop(160,160)",
     "Test Data Preprocess" : "",
     "Train samples" : {"Promise12" : 45, "ISBI" : 63, "Decathlon" : 25, "Prostate158" : 119},
     "Test Samples" : {"Promise12" : 5, "ISBI" : 16, "Decathlon" : 7, "Prostate158" : 20},
@@ -129,116 +155,14 @@ config = {
 
 if wandb_log:
     wandb.login()
-    wandb.init(project="CL_Baselines", entity="vinayu", config = config)
+    wandb.init(project="CL_Replay", entity="vinayu", config = config)
     
-# ----------------------------------------------------------------------------------------------------
-import quadprog
-memory_strength = 0.5
-patterns_per_experience = 10
-memory_x = {}
-memory_y = {}
-memory_tid = {}
-global_G = None
+# ------------------------------------Importance Sampling-------------------------------------
 
-def before_training_iteration():
-    # Before training iteration on an experience/task
-    model.train()
-    local_G = []
-    for x,y in zip(memory_x, memory_y):
-        x, y = x.to(device), y.to(device)
-        optimizer.zero_grad()
-        out = model(x)
-        loss = dice_ce_loss(out, y)
-        loss.backward()
+importance_map = {}
+from importance import get_sample_importance
 
-        local_G.append(
-            torch.cat(
-                [
-                    p.grad.flatten()
-                    if p.grad is not None
-                    else torch.zeros(p.numel()).to(device)
-                    for p in model.parameters()
-                ],
-                dim = 0
-            )
-        )
-       
-@torch.no_grad() 
-def after_backward(tid):
-    # After backward pass in training iteration on an experience/task
-    # After backward : projct gradients
-    if tid > 0:
-        g = torch.cat(
-            [
-                p.grad.flatten()
-                if p.grad is not None
-                else torch.zeros(p.numel()).to(device)
-                for p in model.parameters()
-            ],
-            dim=0,
-        )
-
-        to_project = (torch.mv(global_G, g) < 0).any()
-    else:
-        to_project = False
-        
-    if to_project:
-        v_star = solve_quadprog(g).to(device)
-
-        num_pars = 0  # reshape v_star into the parameter matrices
-        for p in model.parameters():
-            curr_pars = p.numel()
-            if p.grad is not None:
-                p.grad.copy_(
-                    v_star[num_pars: num_pars + curr_pars].view(p.size())
-                )
-            num_pars += curr_pars
-
-        assert num_pars == v_star.numel(), "Error in projecting gradient"
-        
-        
-# After training experiment
-# update memory with patterns from current experience
-def update_memory(dataloader, tid):
-    # Update memory
-    for x, y in dataloader:
-        if tid not in memory_x:
-            memory_x[tid] = []
-            memory_y[tid] = []
-            memory_tid[tid] = []
-        else:
-            memory_x[tid].append(x)
-            memory_y[tid].append(y)
-            memory_tid[tid].append(tid)
-            
-    memory_x[tid] = torch.cat(memory_x[tid], dim=0)
-    memory_y[tid] = torch.cat(memory_y[tid], dim=0)
-    memory_tid[tid] = torch.cat(memory_tid[tid], dim=0)
-    
-
-def solve_quadprog(g):
-    """
-    Solve quadratic programming with current gradient g and
-    gradients matrix on previous tasks G.
-    Taken from original code:
-    https://github.com/facebookresearch/GradientEpisodicMemory/blob/master/model/gem.py
-    """
-    
-    memories_np = global_G.cpu().double().numpy()
-    gradient_np = g.cpu().contiguous().view(-1).double().numpy()
-    t = memories_np.shape[0]
-    P = np.dot(memories_np, memories_np.transpose())
-    P = 0.5 * (P + P.transpose()) + np.eye(t) * 1e-3
-    q = np.dot(memories_np, gradient_np) * -1
-    G = np.eye(t)
-    h = np.zeros(t) + memory_strength
-    v = quadprog.solve_qp(P, q, G, h)[0]
-    v_star = np.dot(v, memories_np) + gradient_np
-
-    return torch.from_numpy(v_star).float()
-# --------------------------------------------------------------------------
-
-# ----------------------------------------------------------------------------------------------------
+# -----------------------------------------Training--------------------------------------------
     
 batch_size = 1
 test_shuffle = True
@@ -261,9 +185,25 @@ def train(train_loader : DataLoader, em_loader : DataLoader = None):
     
     
     # Iterating over the dataset
-    for i, (imgs, labels) in enumerate(train_loader, 1):
+    for i, (imgs, labels, index) in enumerate(train_loader, 1):
 
         imgs, labels = imgs.to(device), labels.to(device)
+        
+        if sampling_strategy == 'importance':
+            index = index.item()
+            if index not in importance_map[dataset_name]:
+                importance_map[dataset_name][index] = 0
+            # print(f"{dataset_name}:{index} Previous Gradient Sum : {int(importance_map[dataset_name][index])}")
+            importance_map[dataset_name][index] += get_sample_importance(model, imgs, labels, dice_ce_loss, optimizer)
+            # print(f"{dataset_name}:{index} Updated Gradient Sum  : {int(importance_map[dataset_name][index])}")
+            
+        if em_loader is not None:
+            em_imgs, em_labels, _ = next(iter(em_loader))
+            em_imgs, em_labels = em_imgs.to(device), em_labels.to(device)
+
+            # Stacking up batch from current dataset and episodic memeory 
+            imgs, labels = torch.cat([imgs, em_imgs], dim=-1), torch.cat([labels, em_labels], dim=-1)
+        
         imgs = rearrange(imgs, 'b c h w d -> (b d) c h w')
         labels = rearrange(labels, 'b c h w d -> (b d) c h w')
 
@@ -271,7 +211,7 @@ def train(train_loader : DataLoader, em_loader : DataLoader = None):
         preds = model(imgs)
 
         loss = dice_ce_loss(preds, labels)
-        
+
         preds = [post_pred(i) for i in decollate_batch(preds)]
         preds = torch.stack(preds)
         labels = [post_label(i) for i in decollate_batch(labels)]
@@ -298,12 +238,12 @@ def train(train_loader : DataLoader, em_loader : DataLoader = None):
     log_metrics = {f"{dataset_name.upper()} Train Dice" : dice_metric.aggregate().item() * 100,
                    f"{dataset_name.upper()} Train HD" : hd_metric.aggregate().item(),
                    f"{dataset_name.upper()} Train Loss" : epoch_loss / len(train_loader),
-                   f"{dataset_name.upper()} Learning Rate" : scheduler.get_last_lr()[0],
+                   # "Learning Rate" : scheduler.get_last_lr()[0],
                    f"Epoch" : epoch }
     if wandb_log:
         wandb.log(log_metrics)
         print(f'Logged training metrics to wandb')
-        
+
 
     dice_metric.reset()
     hd_metric.reset()
@@ -320,7 +260,7 @@ def validate(test_loader : DataLoader, dataset_name : str = None):
     model.eval()
     with torch.no_grad():
         # Iterate over all samples in the dataset
-        for i, (imgs, labels) in enumerate(test_loader, 1):
+        for i, (imgs, labels, _) in enumerate(test_loader, 1):
             imgs, labels = imgs.to(device), labels.to(device)
             imgs = rearrange(imgs, 'b c h w d -> (b d) c h w')
             labels = rearrange(labels, 'b c h w d -> (b d) c h w')
@@ -328,7 +268,7 @@ def validate(test_loader : DataLoader, dataset_name : str = None):
             # preds = model(imgs)
             roi_size = (160, 160)
             preds = sliding_window_inference(inputs=imgs, roi_size=roi_size, sw_batch_size=4,
-                                            predictor=model, overlap = 0.5, mode = 'gaussian', device=device)
+                                                predictor=model, overlap = 0.5, mode = 'gaussian', device=device)
             
             preds = [post_pred(i) for i in decollate_batch(preds)]
             preds = torch.stack(preds)
@@ -363,6 +303,30 @@ dataloaders_map, dataset_map = get_dataloaders()
     
 # -----------------------------------------------------------------------
 
+
+
+# Empty replay buffer as a list
+replay_buffer = {
+    "train" : {
+        'images' : [],
+        'labels' : [],
+    },
+}
+
+
+def accumulate_replay_buffer(sampling_strategy : str = 'random'):
+    print('-'*100)
+    print(f"Accumulating replay buffer using {sampling_strategy} sampling strategy")
+    print(f"Storing {store_samples} Samples from {dataset_name.capitalize()} to replay buffer")
+    dataset_importance_map = dict(sorted(importance_map[dataset_name].items(), key=lambda item: item[1], reverse=True))
+    # Select samples with highest gradient sum
+    idxs = list(dataset_importance_map.keys())[:store_samples]
+    print(f"Selected indexes : {idxs}")
+    replay_buffer['train']['images'] +=  [dataset_map[dataset_name]['train']['images'][idx] for idx in idxs]
+    replay_buffer['train']['labels'] +=  [dataset_map[dataset_name]['train']['labels'][idx] for idx in idxs]
+    print(f"Current replay buffer size : {len(replay_buffer['train']['labels'])}")
+    print('-'*100)
+
 optimizer_map ={
     'sgd' : torch.optim.SGD,
     'rmsprop' : torch.optim.RMSprop,
@@ -376,62 +340,57 @@ optimizer_params  = {
 }
 
 test_metrics = []
+epochs_list = [100, 64, 40, 26]
 
 for i, dataset_name in enumerate(domain_order, 1):
-    
+    importance_map[dataset_name] = {}
+    epochs = int(initial_epochs * (epoch_decay**(i-1)))
+    epochs = epochs_list[i-1]
+    lr = initial_lr * (lr_decay**(i-1))
     optimizer = optimizer_map[optimizer_name](model.parameters(), lr = initial_lr * (lr_decay**(i-1)), **optimizer_params[optimizer_name])    
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, verbose=True)
 
     train_loader = dataloaders_map[dataset_name]['train']
+    if i != 1:
+        em_loader = get_dataloader(img_paths = replay_buffer['train']['images'],
+                                label_paths = replay_buffer['train']['labels'],
+                                train = True)
+
     test_dataset_names = ['prostate158', 'isbi', 'promise12', 'decathlon']
 
     metric_prefix  = i
     
-    for epoch in range(1, int(epochs * (epoch_decay**(i-1))) + 1):   
-
-            train(train_loader = train_loader, em_loader = None)
-                        
-    #         if epoch % val_interval == 0:
-    #             test_metric = []
-    #             for dname in test_dataset_names:
-    #                 val_dice, val_hd = validate(test_loader = dataloaders_map[dname]['test'], dataset_name = dname)
-                    
-    #                 log_metrics = {}
-    #                 log_metrics[f'Epoch'] = epoch
-    #                 log_metrics[f'{metric_prefix}_{dname}_curr_dice'] = val_dice*100 
-    #                 log_metrics[f'{metric_prefix}_{dname}_curr_hd'] = val_hd
-
-    #                 if wandb_log:
-    #                     # Quantiative metrics
-    #                     wandb.log(log_metrics)
-    #                     print(f'Logged {dname} test metrics to wandb')
-                        
-    #                 test_metric.append(val_dice*100)
-                    
-    # test_metrics.append(test_metric)
-    
-    
-    
-# cl_metrics = print_cl_metrics(domain_order, test_dataset_names, test_metrics)
-# if wandb_log:
-#     wandb.log(cl_metrics)
-#     print(f'Logged CL metrics to wandb')
-
-
-
-# -----------------------------------------------------------------------
-# 
-# T = len(domain_order) # Number of domains
-# M = {t:{"imgs" : [], "labels" : []} for t in range(T)}
-# for t in range(T):
-#     for x,y in dataloaders_map[domain_order[t]]['train']:
-#         M[t]["imgs"].append(x)
-#         M[t]["labels"].append(y)
+    for epoch in range(1, epochs + 1):   
         
-        # g = grad(l(f(x), y)
-        # gk = grad(l(f, Mk)) for all k < t
-        # ~g = gradient projection
-        # theta = theta - alpha * ~g  (final parameter update)
-# 
-# -----------------------------------------------------------------------
+        if i == 1:
+            train(train_loader = train_loader, em_loader = None)
+        else:
+            train(train_loader = train_loader, em_loader = em_loader)
+        
+        if epoch % val_interval == 0:
+            test_metric = []
+            for dname in test_dataset_names:
+                val_dice, val_hd = validate(test_loader = dataloaders_map[dname]['test'], dataset_name = dname)
+                
+                log_metrics = {}
+                log_metrics[f'Epoch'] = epoch
+                log_metrics[f'{metric_prefix}_{dname}_curr_dice'] = val_dice*100 
+                log_metrics[f'{metric_prefix}_{dname}_curr_hd'] = val_hd
 
+                if wandb_log:
+                    # Quantiative metrics
+                    wandb.log(log_metrics)
+                    print(f'Logged {dname} test metrics to wandb')
+                    
+                test_metric.append(val_dice*100)
+                    
+    test_metrics.append(test_metric)
+    
+    # Store samples to replay buffer using the sampling strategy
+    accumulate_replay_buffer(sampling_strategy = sampling_strategy)    
+
+
+cl_metrics = print_cl_metrics(domain_order, test_dataset_names, test_metrics)
+if wandb_log:
+    wandb.log(cl_metrics)
+    print(f'Logged CL metrics to wandb')

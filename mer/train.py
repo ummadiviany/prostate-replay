@@ -38,7 +38,7 @@ set_determinism(seed=2000)
 wandb_log = True
 
 from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
-from clmetrics import print_cl_metrics
+from agg_metrics import print_cl_metrics
 from copy import deepcopy
 # ------------------------------------------------------------------------------------
 parser = argparse.ArgumentParser(description='For training config')

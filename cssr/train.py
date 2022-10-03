@@ -31,30 +31,30 @@ from torchvision.transforms import ToPILImage
 import argparse
 import pandas as pd
 
-
-torch.manual_seed(2000)
-set_determinism(seed=2000)
-
-wandb_log = True
-
 from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
 from clmetrics import print_cl_metrics
 # ------------------------------------------------------------------------------------
+
+# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:0 --optimizer adam --initial_epochs 100 --lr 1e-3 --lr_decay 1 --epoch_decay 1 --replay --store_samples 5 --wandb_log True --seed 2000 --sampling_strategy random
+# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:0 --optimizer adam --initial_epochs 100 --lr 1e-3 --lr_decay 1 --epoch_decay 1 --replay --store_samples 5 --wandb_log True --seed 2000 --sampling_strategy random --order_reverese
+
 parser = argparse.ArgumentParser(description='For training config')
 
 parser.add_argument('--order', type=str, help='order of the dataset domains')
 parser.add_argument('--device', type=str, help='Specify the device to use')
 parser.add_argument('--optimizer', type=str, help='Specify the optimizer to use')
 
-parser.add_argument('--epochs', type=int, help='No of epochs')
+parser.add_argument('--initial_epochs', type=int, help='No of epochs')
 parser.add_argument('--lr', type=float, help='Learning rate')
 parser.add_argument('--lr_decay', type=float, help='Learning rate decay factor for each dataset')
 parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed after training on each dataset')
 
 parser.add_argument('--replay', default=True, action=argparse.BooleanOptionalAction)
 parser.add_argument('--store_samples', type=int, help='No of samples to store for replay')
-
-# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:1 --optimizer sgd --epochs 100 --lr 1e-3 --lr_decay 1 --epoch_decay 1 --store_samples 5
+parser.add_argument('--seed', type=int, help='Seed for the experiment')
+parser.add_argument('--wandb_log', default=False, action=argparse.BooleanOptionalAction)
+parser.add_argument('--order_reverse', default=False, action=argparse.BooleanOptionalAction)
+parser.add_argument('--sampling_strategy', type=str, help='Sampling strategy for replay buffer')
 
 parsed_args = parser.parse_args()
 
@@ -62,26 +62,41 @@ domain_order = parsed_args.order.split(',')
 device = parsed_args.device
 optimizer_name = parsed_args.optimizer
 
-epochs = parsed_args.epochs
+initial_epochs = parsed_args.initial_epochs
 initial_lr = parsed_args.lr
 lr_decay = parsed_args.lr_decay
 epoch_decay = parsed_args.epoch_decay
 use_replay = parsed_args.replay
 store_samples = parsed_args.store_samples
+seed = parsed_args.seed
+wandb_log = parsed_args.wandb_log
+order_reverse = parsed_args.order_reverse
+sampling_strategy = parsed_args.sampling_strategy
+
+if order_reverse:
+    domain_order = domain_order[::-1]
 
 print('-'*100)
 print(f"{'-->'.join(domain_order)}")
 print(f"Using device : {device}")
-print(f"Training for {epochs} epochs")
+print(f"Initially training for {initial_epochs} epochs")
 print(f"Using optimizer : {optimizer_name}")
 
 print(f"Inital learning rate : {initial_lr}")
 print(f"Using replay : {use_replay}")
 print(f"Replay Sample Size : {store_samples}")
+print(f"Sampling strategy : {sampling_strategy}")
 
 print(f"LR decay  : {lr_decay}")
 print(f"Epoch decay : {epoch_decay}")
+
+print(f"Seed : {seed}")
+print(f"Wandb logging : {wandb_log}")
 print('-'*100)
+
+# Set seed for reproducibility
+torch.manual_seed(seed)
+set_determinism(seed=seed)
 
 # ----------------------------Train Config-----------------------------------------
 
@@ -111,12 +126,13 @@ dice_ce_loss = DiceCELoss(to_onehot_y=True, softmax=True,)
 
 
 config = {
+    "Seed" : seed,
     "Model" : "UNet2D",
     "Seqential Strategy" : f"Raw/Naive Replay with {store_samples} from each dataset",
     "Replay" : use_replay,
     "Replay Sample Size" : store_samples,
     "Replay Strategy" : "Raw",
-    "Replay Sample Selection" : "Samples with highest class 1 percentage",
+    "Sampling Strategy" : sampling_strategy,
     "Domain Ordering" : domain_order,
     "Batch Training Strategy" : "A batch from current dataset and a batch from episodic memeory are stacked. One backward pass and paramenter update.",
 #     "Train Input ROI size" : train_roi_size,
@@ -124,7 +140,7 @@ config = {
 #     "Test mode" : f"Sliding window inference roi = {train_roi_size}",
     "Batch size" : "No of slices in original volume",
     "No of volumes per batch" : 1,
-    "Epochs" : epochs,
+    "Initial Epochs" : initial_epochs,
     "Epoch decay" : epoch_decay,
     "Optimizer" : optimizer_name.capitalize(),
     "Scheduler" : "CosineAnnealingLR",
@@ -286,15 +302,24 @@ replay_buffer = {
 import json
 label_class_map = json.load(open('label_class_map.json'))
 
-def accumulate_replay_buffer():
-    
+def accumulate_replay_buffer(sampling_strategy : str = 'random'):
+    print('-'*100)
+    print(f"Accumulating replay buffer using {sampling_strategy} sampling strategy")
     print(f"Storing {store_samples} Samples from {dataset_name.capitalize()} to replay buffer")
     idxs = list(label_class_map[dataset_name].keys())
-    idxs = list(map(int, idxs[:store_samples]))
+    
+    if sampling_strategy == 'representative':
+        idxs = list(map(int, idxs[::len(idxs)//store_samples]))
+    elif sampling_strategy == 'class1_representative':
+        idxs = list(map(int, idxs[:store_samples]))
+    elif sampling_strategy == 'random':
+        idxs = sample(idxs, store_samples)
+
+    print(f"Selected indexes : {idxs}")
     replay_buffer['train']['images'] +=  [dataset_map[dataset_name]['train']['images'][idx] for idx in idxs]
     replay_buffer['train']['labels'] +=  [dataset_map[dataset_name]['train']['labels'][idx] for idx in idxs]
     print(f"Current replay buffer size : {len(replay_buffer['train']['labels'])}")
-
+    print('-'*100)
 
 optimizer_map ={
     'sgd' : torch.optim.SGD,
@@ -309,9 +334,13 @@ optimizer_params  = {
 }
 
 test_metrics = []
+epochs_list = [100, 64, 40, 26]
 
 for i, dataset_name in enumerate(domain_order, 1):
     
+    epochs = int(initial_epochs * (epoch_decay**(i-1)))
+    epochs = epochs_list[i-1]
+    lr = initial_lr * (lr_decay**(i-1))
     optimizer = optimizer_map[optimizer_name](model.parameters(), lr = initial_lr * (lr_decay**(i-1)), **optimizer_params[optimizer_name])    
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, verbose=True)
 
@@ -325,7 +354,7 @@ for i, dataset_name in enumerate(domain_order, 1):
 
     metric_prefix  = i
     
-    for epoch in range(1, int(epochs * (epoch_decay**(i-1))) + 1):   
+    for epoch in range(1, epochs + 1):   
         
             if i == 1:
                 train(train_loader = train_loader, em_loader = None)
@@ -351,8 +380,8 @@ for i, dataset_name in enumerate(domain_order, 1):
                     
     test_metrics.append(test_metric)
     
-    # Add 10% of samples from current dataset to replay buffer
-    accumulate_replay_buffer()    
+    # Store samples to replay buffer using the sampling strategy
+    accumulate_replay_buffer(sampling_strategy = sampling_strategy)    
 
 
 cl_metrics = print_cl_metrics(domain_order, test_dataset_names, test_metrics)

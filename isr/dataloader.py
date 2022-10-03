@@ -19,7 +19,7 @@ from monai.metrics import DiceMetric, HausdorffDistanceMetric
 from monai.inferers import sliding_window_inference
 from monai.losses import DiceLoss, FocalLoss, GeneralizedDiceLoss, DiceCELoss, DiceFocalLoss
 from monai.networks.nets import UNet, VNet, UNETR, SwinUNETR, AttentionUnet
-from monai.data import decollate_batch, ImageDataset
+from monai.data import decollate_batch
 from monai.utils import set_determinism
 import os
 import wandb
@@ -29,6 +29,8 @@ from einops.layers.torch import Rearrange
 from torch.optim.lr_scheduler import ExponentialLR, CosineAnnealingLR
 from random import sample
 from torchvision.transforms import ToPILImage
+
+from dataset import ImageDataset
 
 torch.manual_seed(2000)
 set_determinism(seed=2000)
@@ -151,9 +153,9 @@ def get_dataloaders():
         dataset_map[dataset]['test']['images'] = images_fold[train_idx:]
         dataset_map[dataset]['test']['labels'] = labels_fold[train_idx:]
         
-        print(f"------------{dataset}------------")
-        print(f"First train image: {dataset_map[dataset]['train']['images'][0]}")
-        print(f"Last train image: {dataset_map[dataset]['train']['images'][-1]}")
+        # print(f"------------{dataset}------------")
+        # print(f"First train image: {dataset_map[dataset]['train']['images'][0]}")
+        # print(f"Last train image: {dataset_map[dataset]['train']['images'][-1]}")
         
         dataloaders_map = {}
 
@@ -221,6 +223,17 @@ if __name__ == "__main__":
             
         #     if i == 5:
         #         break
+        
     
-    
+    # index_to_filenames = {}
+    # for dataset_name in dataset_map:
+    #     index_to_filenames[dataset_name] = {}
+    #     imgs = dataset_map[dataset_name]['train']['images']
+    #     for i, img in enumerate(imgs):
+    #         index_to_filenames[dataset_name][i] = img
+
+    # import json
+    # with open('index_to_filenames.json', 'w') as fp:
+    #     json.dump(index_to_filenames, fp)
+        
     print(f"Completed in: {time() - start:.1f} seconds")

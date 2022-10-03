@@ -41,7 +41,7 @@ wandb_log = True
 # ------------------------------------------------------------------------------------------------
 
 from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
-from clmetrics import print_cl_metrics
+from agg_metrics import print_cl_metrics
 
 
 # ------------------------------------------------------------------------------------------------
