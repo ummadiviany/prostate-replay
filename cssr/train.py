@@ -49,7 +49,7 @@ parser.add_argument('--lr', type=float, help='Learning rate')
 parser.add_argument('--lr_decay', type=float, help='Learning rate decay factor for each dataset')
 parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed after training on each dataset')
 
-parser.add_argument('--replay', default=True, action=argparse.BooleanOptionalAction)
+parser.add_argument('--replay', default=False, action=argparse.BooleanOptionalAction)
 parser.add_argument('--store_samples', type=int, help='No of samples to store for replay')
 parser.add_argument('--seed', type=int, help='Seed for the experiment')
 parser.add_argument('--wandb_log', default=False, action=argparse.BooleanOptionalAction)
@@ -71,6 +71,8 @@ store_samples = parsed_args.store_samples
 seed = parsed_args.seed
 wandb_log = parsed_args.wandb_log
 order_reverse = parsed_args.order_reverse
+
+sampling_strategy = None
 sampling_strategy = parsed_args.sampling_strategy
 
 if order_reverse:
@@ -345,7 +347,7 @@ for i, dataset_name in enumerate(domain_order, 1):
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, verbose=True)
 
     train_loader = dataloaders_map[dataset_name]['train']
-    if i != 1:
+    if i != 1 and use_replay:
         em_loader = get_dataloader(img_paths = replay_buffer['train']['images'],
                                 label_paths = replay_buffer['train']['labels'],
                                 train = True)
@@ -359,8 +361,11 @@ for i, dataset_name in enumerate(domain_order, 1):
             if i == 1:
                 train(train_loader = train_loader, em_loader = None)
             else:
-                train(train_loader = train_loader, em_loader = em_loader)
-            
+                if use_replay:
+                    train(train_loader = train_loader, em_loader = em_loader)
+                else:
+                    train(train_loader = train_loader, em_loader = None)
+                    
             if epoch % val_interval == 0:
                 test_metric = []
                 for dname in test_dataset_names:
@@ -380,8 +385,10 @@ for i, dataset_name in enumerate(domain_order, 1):
                     
     test_metrics.append(test_metric)
     
-    # Store samples to replay buffer using the sampling strategy
-    accumulate_replay_buffer(sampling_strategy = sampling_strategy)    
+    # If using replay buffer, accumulate samples from current domain
+    if use_replay:
+        # Store samples to replay buffer using the sampling strategy
+        accumulate_replay_buffer(sampling_strategy = sampling_strategy)    
 
 
 cl_metrics = print_cl_metrics(domain_order, test_dataset_names, test_metrics)

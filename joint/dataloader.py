@@ -56,7 +56,6 @@ def get_dataloader(img_paths : list, label_paths : list, train : bool):
 
 batch_size = 1
 train_roi_size = 160
-resize_dim = 256
 
 # Transforms for images & labels
 transforms_map = {

@@ -31,29 +31,56 @@ from torchvision.transforms import ToPILImage
 import argparse
 import pandas as pd
 
-torch.manual_seed(2000)
-set_determinism(seed=2000)
 
-wandb_log = False
 
 
 from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
 # --------------------------------Input Arguments to be passed----------------------------------------------------
 parser = argparse.ArgumentParser(description='For training config')
 
-parser.add_argument('--device', type=str, help='Specify the device to use', required=True)
-parser.add_argument('--epochs', type=int, help='No of epochs', required=True)
-parser.add_argument('--lr', type=float, help='Learning rate', required=True)
+parser.add_argument('--order', type=str, help='order of the dataset domains')
+parser.add_argument('--device', type=str, help='Specify the device to use')
+parser.add_argument('--optimizer', type=str, help='Specify the optimizer to use')
+
+parser.add_argument('--epochs', type=int, help='No of epochs')
+parser.add_argument('--lr', type=float, help='Learning rate')
+
+parser.add_argument('--seed', type=int, help='Seed for the experiment')
+parser.add_argument('--wandb_log', default=False, action=argparse.BooleanOptionalAction)
+parser.add_argument('--order_reverse', default=False, action=argparse.BooleanOptionalAction)
 
 parsed_args = parser.parse_args()
 
+domain_order = parsed_args.order.split(',')
 device = parsed_args.device
-epochs = parsed_args.epochs
-initial_lr = parsed_args.lr
+optimizer_name = parsed_args.optimizer
 
-print(f"Training on {device}")
-print(f"No of epochs : {epochs}")
-print(f"Learning rate : {initial_lr}")
+epochs = parsed_args.epochs
+lr = parsed_args.lr
+
+seed = parsed_args.seed
+wandb_log = parsed_args.wandb_log
+order_reverse = parsed_args.order_reverse
+
+
+if order_reverse:
+    domain_order = domain_order[::-1]
+
+print('-'*100)
+print(f"{'-->'.join(domain_order)}")
+print(f"Using device : {device}")
+print(f"Initially training for {epochs} epochs")
+print(f"Using optimizer : {optimizer_name}")
+
+print(f"Inital learning rate : {lr}")
+
+print(f"Seed : {seed}")
+print(f"Wandb logging : {wandb_log}")
+print('-'*100)
+
+# Set seed for reproducibility
+torch.manual_seed(seed)
+set_determinism(seed=seed)
 
 
 # ----------------------------Get Dataloaders--------------------------------------------
@@ -86,7 +113,7 @@ model = UNet(
         num_res_units=3,
     ).to(device)
 
-optimizer = Adam(model.parameters(), lr=initial_lr, weight_decay=1e-5)
+optimizer = Adam(model.parameters(), lr=lr, weight_decay=1e-5)
 scheduler = CosineAnnealingLR(optimizer, T_max=epochs, verbose=True)
 dice_metric = DiceMetric(include_background=False, reduction="mean", get_not_nans=False)
 hd_metric = HausdorffDistanceMetric(include_background=False, percentile = 95.)
@@ -104,6 +131,9 @@ dice_ce_loss = DiceCELoss(to_onehot_y=True, softmax=True,)
 
 
 config = {
+    "Seed" : seed,
+    "Seqential Strategy" : f"Joint training on all datasets",
+    "Domain Ordering" : domain_order,
     "Model" : "UNet2D",
     "Dataset Name" : f"Joint Training on All Datasets",
     "Train Input size" :(256, 256),
@@ -112,10 +142,12 @@ config = {
     "Test mode" : f"Sliding Window(160, 160)",
     "Batch size" : "No of slices in original volume",
     "No of volumes per batch" : 1,
-    "Epochs" : epochs,
-    "Optimizer" : "Adam",
+    "Initial Epochs" : epochs,
+    "Optimizer" : optimizer_name.capitalize(),
     "Scheduler" : "CosineAnnealingLR",
-    "Initial LR" : initial_lr,
+    "Initial LR" : lr,
+    "Optimizer" : f"{optimizer_name.upper()}",
+    "Scheduler" : "CosineAnnealingLR",
     "Loss" : "DiceCELoss", 
     "Train Data Augumentations" : "Resize(256,256), RandSpatialCrop(160, 160)",
     "Test Data Preprocess" : "Resize(256,256)",
@@ -159,10 +191,7 @@ def train(train_loader : DataLoader, em_loader : DataLoader = None):
         labels = rearrange(labels, 'b c h w d -> (b d) c h w')
 
         optimizer.zero_grad()
-        # preds = model(imgs)
-        roi_size = (192, 192)
-        preds = sliding_window_inference(inputs=imgs, roi_size=roi_size, sw_batch_size=4,
-                                            predictor=model, overlap = 0.5, mode = 'gaussian', device=device)
+        preds = model(imgs)
 
         loss = dice_ce_loss(preds, labels)
 
@@ -218,7 +247,6 @@ def validate(test_loader : DataLoader, dataset_name : str = None):
             imgs = rearrange(imgs, 'b c h w d -> (b d) c h w')
             labels = rearrange(labels, 'b c h w d -> (b d) c h w')
 
-            # preds = model(imgs)
             roi_size = (160, 160)
             preds = sliding_window_inference(inputs=imgs, roi_size=roi_size, sw_batch_size=4,
                                             predictor=model, overlap = 0.5, mode = 'gaussian', device=device)
@@ -255,7 +283,19 @@ def validate(test_loader : DataLoader, dataset_name : str = None):
 
     
 # -------------------------------Training Loop----------------------------------------
+optimizer_map ={
+    'sgd' : torch.optim.SGD,
+    'rmsprop' : torch.optim.RMSprop,
+    'adam' : torch.optim.Adam,
+}
 
+optimizer_params  = {
+    'sgd' : {'momentum' : 0.9, 'weight_decay' : 1e-5, 'nesterov' : True},
+    'rmsprop' : {'momentum' : 0.9, 'weight_decay' : 1e-5},
+    'adam' : {'weight_decay': 1e-5,},   
+}
+
+test_metrics = []
 test_dataset_names = ['prostate158', 'isbi', 'promise12', 'decathlon',]
 
 for epoch in range(1, epochs+1):   
@@ -274,13 +314,9 @@ for epoch in range(1, epochs+1):
             if wandb_log:
                 # Quantiative metrics
                 wandb.log(log_metrics)
-                print(f'Logged {dname} test metrics to wandb')
+                print(f'Logged {dname.upper()} test metrics to wandb')
                     
-    if epoch % model_save_interval == 0:
-        # Save the model weights to disk
-        model_name = 'unet2d_joint'
-        torch.save(model.state_dict(), f"weights/{model_name}_{epoch}.pth")
-        print(f"\nSaved model weights to weights/{model_name}_{epoch}.pth\n")
+
 
 
 

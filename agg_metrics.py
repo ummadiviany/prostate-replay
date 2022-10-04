@@ -49,13 +49,22 @@ if __name__ == "__main__":
     #     "vinayu/CL_Replay/qfa8kbwm",
     # ]
     
-    run_ids = [
-        "vinayu/CL_Replay/12ih1pcu",
-        "vinayu/CL_Replay/1hnz204t",
-        "vinayu/CL_Replay/2mt7zuig",
-        "vinayu/CL_Replay/setcf7ek"
-    ]
-    runs = [api.run(run_id) for run_id in run_ids]
+    # run_ids = [
+    #     "vinayu/CL_Replay/12ih1pcu",
+    #     "vinayu/CL_Replay/1hnz204t",
+    #     "vinayu/CL_Replay/2mt7zuig",
+    #     "vinayu/CL_Replay/setcf7ek"
+    # ]
+    
+    # run_ids = ["vz3xek4r", "uquflia2", "1se1h3df", "1587x1vi"]
+    # run_ids = ["1w83y29a", "1t18fpg7", "1kefi6az", "18gj2sfo"]
+    # Sequential (Adam)
+    # run_ids = ["1eflar5w", "1v1meejw", "2h3e3q3n", "2x951dcn"]
+    # run_ids = ["1ux12qb9", "1hs38hhl", "19wm9gxo", "185djjvl"]
+    # Sequential (SGD)
+    # run_ids = ["33ec8dw4", "xpp035m1", "2d625md3", "2esu6ugy"]
+    run_ids = ["1ebk7d28", "24oj11da", "3jrgl9tu", "11w1z8e5"]
+    runs = [api.run(f"vinayu/CL_Replay/{run_id}") for run_id in run_ids]
     
     for run in runs:
         print(f"Run name: {run.name}")
