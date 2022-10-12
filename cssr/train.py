@@ -336,12 +336,12 @@ optimizer_params  = {
 }
 
 test_metrics = []
-epochs_list = [100, 64, 40, 26]
+# epochs_list = [100, 64, 40, 26]
 
 for i, dataset_name in enumerate(domain_order, 1):
     
     epochs = int(initial_epochs * (epoch_decay**(i-1)))
-    epochs = epochs_list[i-1]
+    # epochs = epochs_list[i-1]
     lr = initial_lr * (lr_decay**(i-1))
     optimizer = optimizer_map[optimizer_name](model.parameters(), lr = initial_lr * (lr_decay**(i-1)), **optimizer_params[optimizer_name])    
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, verbose=True)

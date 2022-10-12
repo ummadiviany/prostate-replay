@@ -38,7 +38,6 @@ from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
 # --------------------------------Input Arguments to be passed----------------------------------------------------
 parser = argparse.ArgumentParser(description='For training config')
 
-parser.add_argument('--order', type=str, help='order of the dataset domains')
 parser.add_argument('--device', type=str, help='Specify the device to use')
 parser.add_argument('--optimizer', type=str, help='Specify the optimizer to use')
 
@@ -47,11 +46,9 @@ parser.add_argument('--lr', type=float, help='Learning rate')
 
 parser.add_argument('--seed', type=int, help='Seed for the experiment')
 parser.add_argument('--wandb_log', default=False, action=argparse.BooleanOptionalAction)
-parser.add_argument('--order_reverse', default=False, action=argparse.BooleanOptionalAction)
 
 parsed_args = parser.parse_args()
 
-domain_order = parsed_args.order.split(',')
 device = parsed_args.device
 optimizer_name = parsed_args.optimizer
 
@@ -60,14 +57,8 @@ lr = parsed_args.lr
 
 seed = parsed_args.seed
 wandb_log = parsed_args.wandb_log
-order_reverse = parsed_args.order_reverse
-
-
-if order_reverse:
-    domain_order = domain_order[::-1]
 
 print('-'*100)
-print(f"{'-->'.join(domain_order)}")
 print(f"Using device : {device}")
 print(f"Initially training for {epochs} epochs")
 print(f"Using optimizer : {optimizer_name}")
@@ -133,7 +124,6 @@ dice_ce_loss = DiceCELoss(to_onehot_y=True, softmax=True,)
 config = {
     "Seed" : seed,
     "Seqential Strategy" : f"Joint training on all datasets",
-    "Domain Ordering" : domain_order,
     "Model" : "UNet2D",
     "Dataset Name" : f"Joint Training on All Datasets",
     "Train Input size" :(256, 256),
