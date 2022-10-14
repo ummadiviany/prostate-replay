@@ -316,6 +316,8 @@ def accumulate_replay_buffer(sampling_strategy : str = 'random'):
         idxs = list(map(int, idxs[:store_samples]))
     elif sampling_strategy == 'random':
         idxs = sample(idxs, store_samples)
+        
+    idxs = list(map(int, idxs))
 
     print(f"Selected indexes : {idxs}")
     replay_buffer['train']['images'] +=  [dataset_map[dataset_name]['train']['images'][idx] for idx in idxs]
@@ -336,14 +338,15 @@ optimizer_params  = {
 }
 
 test_metrics = []
-# epochs_list = [100, 64, 40, 26]
+epochs_list = [100, 64, 40, 26]
 
 for i, dataset_name in enumerate(domain_order, 1):
     
     epochs = int(initial_epochs * (epoch_decay**(i-1)))
-    # epochs = epochs_list[i-1]
+    epochs = epochs_list[i-1]
     lr = initial_lr * (lr_decay**(i-1))
-    optimizer = optimizer_map[optimizer_name](model.parameters(), lr = initial_lr * (lr_decay**(i-1)), **optimizer_params[optimizer_name])    
+    
+    optimizer = optimizer_map[optimizer_name](model.parameters(), lr = lr, **optimizer_params[optimizer_name])    
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, verbose=True)
 
     train_loader = dataloaders_map[dataset_name]['train']
