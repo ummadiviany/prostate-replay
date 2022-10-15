@@ -41,7 +41,7 @@ wandb_log = True
 # ------------------------------------------------------------------------------------------------
 
 from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
-from agg_metrics import print_cl_metrics
+from clmetrics import print_cl_metrics
 
 
 # ------------------------------------------------------------------------------------------------
@@ -53,12 +53,15 @@ parser.add_argument('--device', type=str, help='Specify the device to use')
 parser.add_argument('--optimizer', type=str, help='Specify the optimizer to use')
 parser.add_argument('--ewc_weight', type=float, help='EWC weight')
 
-parser.add_argument('--epochs', type=int, help='No of epochs')
+parser.add_argument('--initial_epochs', type=int, help='No of epochs')
 parser.add_argument('--lr', type=float, help='Learning rate')
-parser.add_argument('--lr_decay', type=float, help='Learning rate decay factor for each dataset. range[0, 1]')
-parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed after training on each dataset. range[0, 1]')
+parser.add_argument('--lr_decay', type=float, help='Learning rate decay factor for each dataset')
+parser.add_argument('--epoch_decay', type=float, help='epochs will be decayed after training on each dataset')
 
-# python train.py --order decathlon,promise12,isbi,prostate158 --device cuda:0 --optimizer sgd --epochs 100 --lr 1e-3 --lr_decay 1 --epoch_decay 1
+parser.add_argument('--seed', type=int, help='Seed for the experiment')
+parser.add_argument('--wandb_log', default=False, action=argparse.BooleanOptionalAction)
+parser.add_argument('--order_reverse', default=False, action=argparse.BooleanOptionalAction)
+
 
 parsed_args = parser.parse_args()
 
@@ -66,22 +69,38 @@ domain_order = parsed_args.order.split(',')
 device = parsed_args.device
 optimizer_name = parsed_args.optimizer
 ewc_weight = parsed_args.ewc_weight
-epochs = parsed_args.epochs
+
+initial_epochs = parsed_args.initial_epochs
 initial_lr = parsed_args.lr
 lr_decay = parsed_args.lr_decay
 epoch_decay = parsed_args.epoch_decay
 
+seed = parsed_args.seed
+wandb_log = parsed_args.wandb_log
+order_reverse = parsed_args.order_reverse
+
+
+if order_reverse:
+    domain_order = domain_order[::-1]
+
 print('-'*100)
 print(f"{'-->'.join(domain_order)}")
 print(f"Using device : {device}")
+print(f"Initially training for {initial_epochs} epochs")
 print(f"Using optimizer : {optimizer_name}")
 print(f"Using ewc_weight : {ewc_weight}")
-print(f"Training for {epochs} epochs")
+
 print(f"Inital learning rate : {initial_lr}")
 print(f"LR decay  : {lr_decay}")
 print(f"Epoch decay : {epoch_decay}")
+
+print(f"Seed : {seed}")
+print(f"Wandb logging : {wandb_log}")
 print('-'*100)
 
+# Set seed for reproducibility
+torch.manual_seed(seed)
+set_determinism(seed=seed)
 # ----------------------------Train Config-----------------------------------------
 
 model = UNet(
@@ -119,7 +138,7 @@ config = {
     "Test mode" : f"Sliding Window(160, 160) Inference",
     "Batch size" : "No of slices in original volume",
     "No of volumes per batch" : 1,
-    "Epochs" : epochs,
+    "Epochs" : initial_epochs,
     "Epoch decay(for each task)" : epoch_decay,
     "Initial Learning Rate" : initial_lr,
     "Learning Rate Decay(for each task)" : lr_decay,
@@ -327,19 +346,25 @@ optimizer_params  = {
     'adam' : {'weight_decay': 1e-5,},   
 }
 
+models_map = {}
 test_metrics = []
+# epochs_list = [100, 64, 40, 26]
 
 for i, dataset_name in enumerate(domain_order, 1):
     
-    optimizer = optimizer_map[optimizer_name](model.parameters(), lr = initial_lr * (lr_decay**(i-1)), **optimizer_params[optimizer_name])    
+    epochs = int(initial_epochs * (epoch_decay**(i-1)))
+    # epochs = epochs_list[i-1]
+    lr = initial_lr * (lr_decay**(i-1))
+    
+    optimizer = optimizer_map[optimizer_name](model.parameters(), lr = lr, **optimizer_params[optimizer_name])    
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, verbose=True)
-
+    
     train_loader = dataloaders_map[dataset_name]['train']
     test_dataset_names = ['prostate158', 'isbi', 'promise12', 'decathlon']
 
     metric_prefix  = i
     
-    for epoch in range(1, int(epochs * (epoch_decay**(i-1))) + 1):   
+    for epoch in range(1, int(epochs + 1)):   
 
             train(train_loader = train_loader, em_loader = None)
                         
@@ -362,11 +387,13 @@ for i, dataset_name in enumerate(domain_order, 1):
                     
     test_metrics.append(test_metric)
     
+    print("Updating model weights with EWC Constraint")
     ewc.register_ewc_params(train_loader)
     
-    
-cl_metrics = print_cl_metrics(domain_order, test_dataset_names, test_metrics)
-wandb.log(cl_metrics)
+
+if wandb_log:
+    cl_metrics = print_cl_metrics(domain_order, test_dataset_names, test_metrics)
+    wandb.log(cl_metrics)
 
 
 

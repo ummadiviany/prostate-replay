@@ -37,7 +37,7 @@ set_determinism(seed=2000)
 wandb_log = True
 
 from dataloader import get_dataloader, get_img_label_folds, get_dataloaders
-from agg_metrics import print_cl_metrics
+from clmetrics import print_cl_metrics
 
 # ------------------------------------------------------------------------------------
 parser = argparse.ArgumentParser(description='For training config')
@@ -72,8 +72,6 @@ seed = parsed_args.seed
 wandb_log = parsed_args.wandb_log
 order_reverse = parsed_args.order_reverse
 
-sampling_strategy = None
-sampling_strategy = parsed_args.sampling_strategy
 
 if order_reverse:
     domain_order = domain_order[::-1]
@@ -86,7 +84,6 @@ print(f"Using optimizer : {optimizer_name}")
 print(f"Alpha for L2 regularization: {alpha}")
 
 print(f"Inital learning rate : {initial_lr}")
-
 print(f"LR decay  : {lr_decay}")
 print(f"Epoch decay : {epoch_decay}")
 
@@ -235,7 +232,7 @@ def train(train_loader : DataLoader, em_loader : DataLoader = None):
                    f"Epoch" : epoch }
     if wandb_log:
         wandb.log(log_metrics)
-        print(f'Logged training metrics to wandb')
+        print(f'Logged {dataset_name} training metrics to wandb')
         
 
     dice_metric.reset()
@@ -317,7 +314,7 @@ epochs_list = [100, 64, 40, 26]
 for i, dataset_name in enumerate(domain_order, 1):
     
     epochs = int(initial_epochs * (epoch_decay**(i-1)))
-    epochs = epochs_list[i-1]
+    # epochs = epochs_list[i-1]
     lr = initial_lr * (lr_decay**(i-1))
     
     optimizer = optimizer_map[optimizer_name](model.parameters(), lr = lr, **optimizer_params[optimizer_name])    
@@ -328,7 +325,7 @@ for i, dataset_name in enumerate(domain_order, 1):
 
     metric_prefix  = i
     
-    for epoch in range(1, int(epochs + 1):   
+    for epoch in range(1, int(epochs + 1)):   
 
             train(train_loader = train_loader, em_loader = None)
                         
@@ -353,6 +350,6 @@ for i, dataset_name in enumerate(domain_order, 1):
     models_map[dataset_name] = deepcopy(model)
     
     
-    
-cl_metrics = print_cl_metrics(domain_order, test_dataset_names, test_metrics)
-wandb.log(cl_metrics)
+if wandb_log:
+    cl_metrics = print_cl_metrics(domain_order, test_dataset_names, test_metrics)
+    wandb.log(cl_metrics)

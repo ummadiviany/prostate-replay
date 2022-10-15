@@ -68,9 +68,22 @@ if __name__ == "__main__":
     # Worst case
     # run_ids = ["1xpusaof", "298foogv", "2u9d54o7", "2u66xy2s"]
     # Practical case
-    run_ids = ["1e98rhnh", "3ljzmerp", "lje1d3uf", "mkfb1xjf"]
-        
-    runs = [api.run(f"vinayu/CL_Replay/{run_id}") for run_id in run_ids]
+    # run_ids = ["1e98rhnh", "3ljzmerp", "lje1d3uf", "mkfb1xjf"]
+    
+    # L2 Regularization runs
+    # Worst case
+    # run_ids = ["1rodm2dn", "2wbbg6b8", "grli6duw", "sjrz1sz0"]
+    # Practical case
+    # run_ids = ["1vuiaj4p", "2fuxrkuw", "2kd2zotj", "t8ibbihk"]
+
+    # EWC runs (100, 80, 64, 51)
+    # Worst case
+    # run_ids = ["1idc16p5", "2u2nbguu", "3sepz1qd", "3ur7ecrp"]
+    # Practical case
+    run_ids = ["pw8se6as", "g4u3clw2", "dby7164l", "39hjgrxb"]
+    
+     
+    runs = [api.run(f"vinayu/CL_Baselines/{run_id}") for run_id in run_ids]
     for run in runs:
         print(f"Run name: {run.name}")
         run_data = get_run_summary_metrics(run, necessary_keys)

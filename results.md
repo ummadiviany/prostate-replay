@@ -11,7 +11,8 @@
 |Class Representative Replay |  |  |  |  |      80.2      |          -1.6           |           2.4            |
 |Sample Importance Replay |  |  |  |  |      81.6      |          0.4           |           0.8            |
 |Sample Importance Representative Replay |  |  |  |  |      -      |          -           |           -            |
-
+|L2 Regularization | 37.9 ± 1.6                | 61.6 ± 10.8        | 34.9 ± 16.5             | 81.4 ± 2.0              | 53.9 ± 3.9       | 0.2 ± 0.2                 | -0.2 ± 0.2                  |
+|EWC | 83.5 ± 1.4                | 76.9 ± 4.2         | 60.2 ± 11.2             | 74.9 ± 5.8              | 73.8 ± 2.8       | -10.4 ± 4.5               | 11.4 ± 5.5                  |
 
 ### Training order (Practical Case) : Prostate158 --> ISBI --> Promise12 --> Decathlon
 
@@ -26,3 +27,5 @@
 |Class Representative Replay |  |  |  |  |      79.1      |          -5.2           |           6.1            |
 |Sample Importance Replay |  |  |  |  |      81.55      |          -2.1           |           2.7            |
 |Sample Importance Representative Replay |  |  |  |  |      -      |          -           |           -            |
+|L2 Regularization | 83.5 ± 1.6                | 67.6 ± 5.2         | 43.8 ± 10.6             | 69.6 ± 4.8              | 66.1 ± 3.8       | -0.0 ± 0.0                | 0.0 ± 0.0                   |
+|EWC | 61.6 ± 3.2                | 82.6 ± 2.6         | 64.2 ± 10.9             | 85.3 ± 1.3              | 73.4 ± 3.1       | -13.6 ± 4.3               | 14.8 ± 3.5                  |
