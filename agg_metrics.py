@@ -80,10 +80,10 @@ if __name__ == "__main__":
     # Worst case
     # run_ids = ["1idc16p5", "2u2nbguu", "3sepz1qd", "3ur7ecrp"]
     # Practical case
-    run_ids = ["pw8se6as", "g4u3clw2", "dby7164l", "39hjgrxb"]
+    # run_ids = ["pw8se6as", "g4u3clw2", "dby7164l", "39hjgrxb"]
     
      
-    runs = [api.run(f"vinayu/CL_Baselines/{run_id}") for run_id in run_ids]
+    runs = [api.run(f"vinayu/CL_Replay/{run_id}") for run_id in run_ids]
     for run in runs:
         print(f"Run name: {run.name}")
         run_data = get_run_summary_metrics(run, necessary_keys)
